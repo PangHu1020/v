@@ -36,9 +36,9 @@ from backend.app.channels.wecom.crypto import WecomCrypto
 from backend.app.channels.wecom.router import build_router as build_wecom_router
 from backend.app.channels.wecom.signature import compute_signature
 from backend.app.gateway.middleware import RequestIdMiddleware
+from backend.v.agents.checkpointer import RedisCheckpointer
 from backend.v.agents.graph import build_graph
 from backend.v.configs.base import WecomSettings
-from backend.v.memory.checkpointer import RedisCheckpointer
 from backend.v.models.llm_caller import LLMResult
 
 TEST_AES_KEY = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ"

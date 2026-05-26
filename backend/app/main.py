@@ -28,9 +28,9 @@ from backend.app.channels.wecom.router import build_router as build_wecom_router
 from backend.app.gateway.middleware import RequestIdMiddleware
 from backend.app.gateway.routers import health
 from backend.app.store import close_client, close_pool, create_client, create_pool
+from backend.v.agents.checkpointer import RedisCheckpointer
 from backend.v.agents.graph import build_graph
 from backend.v.configs import get_settings
-from backend.v.memory.checkpointer import RedisCheckpointer
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.utils.logging import configure as configure_logging
 from backend.v.utils.logging import get_logger

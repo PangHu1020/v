@@ -1,17 +1,20 @@
-"""Minimal Redis-backed LangGraph checkpointer with TTL.
+"""Redis-backed LangGraph checkpointer with TTL (working-memory hot path).
 
-Phase-1 stores all checkpoints for a thread in a single Redis hash and
-refreshes the TTL on every write. The hot-path working memory IS the
-checkpointer; Phase-2 will introduce hot/cold migration where suspended
-threads (after ``transfer_to_human``) are moved to a durable Postgres
-checkpointer with no TTL.
+Lives under ``agents`` because the checkpointer is part of the agent's
+runtime (graph state durability), not user memory. The companion durable
+checkpointer is :mod:`backend.v.agents.pg_checkpointer`; the migration
+helpers between them live in :mod:`backend.v.agents.checkpointer_migration`.
+
+Stores all checkpoints for a thread in a single Redis hash and refreshes
+the TTL on every write. Phase-2 ``transfer_to_human`` flow migrates
+suspended threads to the durable Postgres checkpointer with no TTL.
 
 Limitations
 -----------
 - ``alist`` returns checkpoints from newest to oldest but does not honor
   the ``before``/``filter`` arguments beyond rough ordering. This is
-  sufficient for Phase-1's linear graph; richer history queries can land
-  alongside the Postgres checkpointer in Phase-2.
+  sufficient for the Phase-1 linear graph and Phase-2 handoff; richer
+  history queries land in the Postgres checkpointer alongside Phase-2 P0.
 - ``adelete_thread`` removes the entire thread hash atomically.
 """
 
