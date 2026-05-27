@@ -1,4 +1,4 @@
-.PHONY: install lint fmt test cov dev db-up db-down db-migrate clean
+.PHONY: install lint fmt test cov dev cron db-up db-down db-migrate clean
 
 install:
 	uv sync
@@ -19,6 +19,9 @@ cov:
 
 dev:
 	uv run fastapi dev backend/app/main.py
+
+cron:
+	uv run arq backend.app.cron_worker.WorkerSettings
 
 db-up:
 	docker compose -f docker/docker-compose.yml up -d postgres redis
