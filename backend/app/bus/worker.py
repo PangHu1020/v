@@ -145,6 +145,8 @@ def make_bus_handler(
     redis_ckpt: RedisCheckpointer | None = None,
     pg_ckpt: Any | None = None,
     embedder: Any | None = None,
+    skill_registry: Any | None = None,
+    skill_top_k: int = 3,
 ) -> Callable[[SystemMessage], Awaitable[None]]:
     """Build a bus consumer handler bound to the runtime dependencies.
 
@@ -158,6 +160,11 @@ def make_bus_handler(
             cold checkpointers.
         embedder: Phase-2 P3. Forwarded into graph config so the
             ``recall_memory`` tool can embed queries on demand.
+        skill_registry: Phase-2 P4. Forwarded into graph config so
+            ``enter_node`` can match the customer's message against
+            loaded skills and inline matching SOPs into the system
+            prompt. ``None`` disables skill injection.
+        skill_top_k: Cap on injected skills per turn.
     """
 
     handoff_enabled = slack_outbound is not None and redis_ckpt is not None and pg_ckpt is not None
@@ -230,6 +237,10 @@ def make_bus_handler(
                         "embedder": embedder,
                         "channel": msg.channel,
                         "channel_user_id": msg.channel_user_id,
+                        # Phase-2 P4: enter_node consults this registry to
+                        # match SOPs against the customer's message.
+                        "skill_registry": skill_registry,
+                        "skill_top_k": skill_top_k,
                     }
                 }
 

@@ -41,6 +41,7 @@ from backend.v.hooks.handoff import append_operator_log, on_resume
 from backend.v.mcp import MCPRegistry, MCPToolCache, parse_servers
 from backend.v.models.factory import get_embedding
 from backend.v.models.llm_caller import LLMCaller
+from backend.v.skills import SkillRegistry, load_skills
 from backend.v.utils.logging import configure as configure_logging
 from backend.v.utils.logging import get_logger
 
@@ -89,6 +90,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     redis_ckpt = RedisCheckpointer(redis, ttl_seconds=settings.memory.working_ttl_seconds)
     llm_caller = LLMCaller(settings.llm)
     embedder = get_embedding(settings.llm, settings.embedding)
+
+    # Phase-2 P4: skill registry. Empty path keeps the registry empty
+    # and enter_node skips injection cleanly.
+    skill_registry = SkillRegistry(load_skills(settings.skill.internal_repo_path))
+    if settings.skill.internal_repo_path:
+        _log.info("app.skills.loaded", count=len(skill_registry))
 
     # Phase-2 P1: MCP registry. Tools discovered here are bound to the
     # agent at graph build time, alongside transfer_to_human.
@@ -179,6 +186,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         redis_ckpt=redis_ckpt,
         pg_ckpt=pg_ckpt,
         embedder=embedder,
+        skill_registry=skill_registry,
+        skill_top_k=settings.skill.max_skills_per_turn,
     )
 
     consumer = BusConsumer(

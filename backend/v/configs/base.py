@@ -168,6 +168,24 @@ class ARQSettings(BaseSettings):
         return self.redis_url or fallback
 
 
+class SkillSettings(BaseSettings):
+    """Skill loader settings (Phase-2 P4).
+
+    Skills are markdown SOPs the agent can prepend to its system prompt
+    based on the customer's intent. Phase-2 P4 ships markdown-only;
+    SKILL.md+exec and community-registry sources are Phase-3.
+    """
+
+    model_config = SettingsConfigDict(**_COMMON, env_prefix="SKILL_")
+
+    internal_repo_path: str = ""
+    """Filesystem path to the directory holding markdown skills. Empty
+    disables the loader."""
+
+    max_skills_per_turn: int = Field(default=3, ge=0, le=20)
+    """Top-K skills to inject per matched turn. 0 disables injection."""
+
+
 class AppSettings(BaseModel):
     """Composite settings handed to the FastAPI lifespan and to ``/v/`` modules."""
 
@@ -183,6 +201,7 @@ class AppSettings(BaseModel):
     slack: SlackSettings
     mcp: MCPSettings
     arq: ARQSettings
+    skill: SkillSettings
 
 
 @lru_cache(maxsize=1)
@@ -206,4 +225,5 @@ def get_settings() -> AppSettings:
         slack=SlackSettings(),
         mcp=MCPSettings(),
         arq=ARQSettings(),
+        skill=SkillSettings(),
     )
