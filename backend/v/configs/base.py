@@ -111,6 +111,24 @@ class FeishuSettings(BaseSettings):
     verification_token: str = ""
 
 
+class SlackSettings(BaseSettings):
+    """Slack operator-side adapter credentials and target channel.
+
+    Phase-2 P0: handoff alerts and operator interactivity. Empty values
+    disable the Slack adapter (Phase-1 customer flow continues to work).
+    """
+
+    model_config = SettingsConfigDict(**_COMMON, env_prefix="SLACK_")
+
+    bot_token: str = ""
+    signing_secret: str = ""
+    handoff_channel_id: str = ""
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.bot_token and self.signing_secret and self.handoff_channel_id)
+
+
 class AppSettings(BaseModel):
     """Composite settings handed to the FastAPI lifespan and to ``/v/`` modules."""
 
@@ -123,6 +141,7 @@ class AppSettings(BaseModel):
     bus: BusSettings
     wecom: WecomSettings
     feishu: FeishuSettings
+    slack: SlackSettings
 
 
 @lru_cache(maxsize=1)
@@ -143,4 +162,5 @@ def get_settings() -> AppSettings:
         bus=BusSettings(),
         wecom=WecomSettings(),
         feishu=FeishuSettings(),
+        slack=SlackSettings(),
     )

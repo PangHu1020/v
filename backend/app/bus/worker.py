@@ -3,13 +3,19 @@
 For each :class:`SystemMessage` consumed off the bus:
 
 1. Resolve the session id (mint a new UUID after 30 minutes of silence).
-2. Run ``on_session_start`` to populate ``user_profile``.
-3. Build the initial ``CustomerServiceState`` with a single ``HumanMessage``
+2. **If the session is suspended (operator handoff active)**, forward the
+   customer message to the Slack alert thread and return; do NOT invoke
+   the graph.
+3. Otherwise run ``on_session_start`` to populate ``user_profile``.
+4. Build the initial ``CustomerServiceState`` with a single ``HumanMessage``
    for the new turn.
-4. Invoke the compiled graph with ``thread_id=session_id``.
-5. Pull the last ``AIMessage`` from the resulting state and dispatch it
-   via the channel-specific outbound adapter.
-6. Refresh the ``last_seen`` timestamp.
+5. Invoke the compiled graph with ``thread_id=session_id``.
+6. **If the graph paused at a ``transfer_to_human`` interrupt**, run the
+   ``on_interrupt`` hook (migrate hot->cold, post Slack alert, mark
+   suspended) instead of dispatching a normal reply.
+7. Otherwise pull the last ``AIMessage`` from the resulting state and
+   dispatch it via the channel-specific outbound adapter.
+8. Refresh the ``last_seen`` timestamp.
 
 Outbound replies do NOT re-enter the bus — they flow directly to the
 channel adapter (per the architectural rule in ``backend/app/CLAUDE.md``).
@@ -27,7 +33,14 @@ import redis.asyncio as redis_async
 from langchain_core.messages import AIMessage, HumanMessage
 
 from backend.app.bus.messages import SystemMessage
+from backend.v.agents.checkpointer import RedisCheckpointer
 from backend.v.agents.state import CustomerServiceState
+from backend.v.hooks.handoff import (
+    HandoffNotifier,
+    extract_interrupt,
+    is_suspended,
+    on_interrupt,
+)
 from backend.v.hooks.session import on_session_start
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.utils.logging import bind_request, get_logger
@@ -71,6 +84,30 @@ async def _resolve_session_id(
     return session_id, True
 
 
+async def _persist_session_row(
+    pool: asyncpg.Pool,
+    *,
+    session_id: str,
+    channel: str,
+    channel_user_id: str,
+) -> None:
+    """Insert an ``agent.session`` row for a freshly minted session.
+
+    Idempotent on concurrent retries (``ON CONFLICT DO NOTHING``). Required
+    so downstream operations (e.g., ``on_interrupt`` flipping status to
+    ``suspended``) can reference the session by id.
+    """
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO agent.session (session_id, channel, channel_user_id) "
+            "VALUES ($1, $2, $3) "
+            "ON CONFLICT (session_id) DO NOTHING",
+            session_id,
+            channel,
+            channel_user_id,
+        )
+
+
 async def _record_last_seen(
     redis: redis_async.Redis,
     *,
@@ -86,7 +123,7 @@ def _last_ai_message(messages: list) -> str | None:
     for m in reversed(messages):
         if isinstance(m, AIMessage):
             content = m.content
-            if isinstance(content, str):
+            if isinstance(content, str) and content:
                 return content
             if isinstance(content, list):
                 # LangChain content can be a list of content parts; flatten text bits.
@@ -104,8 +141,23 @@ def make_bus_handler(
     sends: SendRegistry,
     silence_seconds: int,
     cache_ttl_seconds: int,
+    slack_outbound: HandoffNotifier | None = None,
+    redis_ckpt: RedisCheckpointer | None = None,
+    pg_ckpt: Any | None = None,
 ) -> Callable[[SystemMessage], Awaitable[None]]:
-    """Build a bus consumer handler bound to the runtime dependencies."""
+    """Build a bus consumer handler bound to the runtime dependencies.
+
+    Args:
+        slack_outbound: Operator-side adapter that satisfies
+            :class:`HandoffNotifier`. When ``None`` the handler skips the
+            suspended-session and interrupt branches and behaves like
+            Phase-1 (no handoff).
+        redis_ckpt / pg_ckpt: Required when ``slack_outbound`` is set, used
+            by the on-interrupt hook to migrate the thread between hot and
+            cold checkpointers.
+    """
+
+    handoff_enabled = slack_outbound is not None and redis_ckpt is not None and pg_ckpt is not None
 
     async def handle(msg: SystemMessage) -> None:
         with bind_request(
@@ -118,7 +170,35 @@ def make_bus_handler(
                 channel_user_id=msg.channel_user_id,
                 silence_seconds=silence_seconds,
             )
+            if minted:
+                await _persist_session_row(
+                    pool,
+                    session_id=session_id,
+                    channel=msg.channel,
+                    channel_user_id=msg.channel_user_id,
+                )
             with bind_request(session_id=session_id):
+                # 1) Suspended-session: forward to Slack thread, skip graph.
+                if handoff_enabled and await is_suspended(session_id, redis=redis):
+                    assert slack_outbound is not None  # narrow for type checkers
+                    thread_ts = await slack_outbound.get_thread_for_session(session_id)
+                    if thread_ts:
+                        await slack_outbound.post_customer_message(
+                            thread_ts=thread_ts,
+                            text=msg.text,
+                        )
+                        _log.info("bus.worker.forwarded_to_slack", thread_ts=thread_ts)
+                    else:
+                        _log.warning("bus.worker.suspended_but_no_thread")
+                    await _record_last_seen(
+                        redis,
+                        channel=msg.channel,
+                        channel_user_id=msg.channel_user_id,
+                        silence_seconds=silence_seconds,
+                    )
+                    return
+
+                # 2) Normal path.
                 profile = await on_session_start(
                     pool=pool,
                     redis=redis,
@@ -148,8 +228,36 @@ def make_bus_handler(
                     text_len=len(msg.text),
                 )
                 final_state = await graph.ainvoke(input_state, config=config)
-                reply = _last_ai_message(final_state.get("messages", []))
 
+                # 3) Interrupt: graph paused at transfer_to_human.
+                if handoff_enabled:
+                    interrupt_payload = await extract_interrupt(final_state)
+                    if interrupt_payload is not None:
+                        assert slack_outbound is not None
+                        assert redis_ckpt is not None
+                        assert pg_ckpt is not None
+                        await on_interrupt(
+                            session_id=session_id,
+                            interrupt_payload=interrupt_payload,
+                            channel=msg.channel,
+                            channel_user_id=msg.channel_user_id,
+                            customer_text=msg.text,
+                            redis=redis,
+                            pg_pool=pool,
+                            redis_ckpt=redis_ckpt,
+                            pg_ckpt=pg_ckpt,
+                            slack_outbound=slack_outbound,
+                        )
+                        await _record_last_seen(
+                            redis,
+                            channel=msg.channel,
+                            channel_user_id=msg.channel_user_id,
+                            silence_seconds=silence_seconds,
+                        )
+                        return
+
+                # 4) Normal reply.
+                reply = _last_ai_message(final_state.get("messages", []))
                 if reply:
                     send = sends.get(msg.channel)
                     if send is None:

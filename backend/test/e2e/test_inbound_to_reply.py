@@ -53,6 +53,7 @@ def _fake_pool() -> MagicMock:
     pool = MagicMock(spec=asyncpg.Pool)
     conn = MagicMock()
     conn.fetchrow = AsyncMock(return_value=None)
+    conn.execute = AsyncMock(return_value="OK")
 
     @asynccontextmanager
     async def _acquire():
