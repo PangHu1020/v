@@ -38,7 +38,8 @@ class TestEnterNode:
                 "messages": [HumanMessage(content="hi")],
                 "channel": "wecom",
                 "user_profile": {"member_level": "gold"},
-            }
+            },
+            config={"configurable": {}},
         )
         assert "messages" in update
         assert isinstance(update["messages"][0], SystemMessage)
@@ -49,7 +50,8 @@ class TestEnterNode:
             {
                 "messages": [SystemMessage(content="prior"), HumanMessage(content="hi")],
                 "channel": "wecom",
-            }
+            },
+            config={"configurable": {}},
         )
         assert update == {}
 

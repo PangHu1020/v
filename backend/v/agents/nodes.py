@@ -77,7 +77,7 @@ def _maybe_skill_section(
 
 async def enter_node(
     state: CustomerServiceState,
-    config: RunnableConfig | None = None,
+    config: RunnableConfig,
 ) -> dict[str, Any]:
     """Prepend a system prompt with the user_profile on the first turn.
 
@@ -106,7 +106,7 @@ async def enter_node(
 
 async def agent_node(
     state: CustomerServiceState,
-    config: RunnableConfig,
+    config: RunnableConfig | None = None,
     *,
     tools: list[Any] | None = None,
 ) -> dict[str, Any]:

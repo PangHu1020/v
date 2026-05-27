@@ -1,23 +1,10 @@
-"""Compile the customer-service LangGraph.
-
-Phase-2 P0 introduces a tool-call loop: ``agent`` may emit ``transfer_to_human``
-tool calls which dispatch through ``ToolNode``; the tool either returns a
-plain result (and the agent continues) or invokes ``interrupt(...)`` and
-suspends the graph for human handoff.
-
-Phase-2 P1 lets callers extend the bound tool list at compile time so MCP
-server tools can join ``transfer_to_human`` on the agent's tool surface.
-The same list is bound to the LLM and to ``ToolNode`` so the LLM's
-choices and the downstream dispatcher always agree.
-
-    enter -> agent -> [tool_calls?] -> tools -> agent -> ... -> exit -> END
-"""
+"""Compile the customer-service LangGraph."""
 
 from __future__ import annotations
 
-from functools import partial
 from typing import Any
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
@@ -34,22 +21,18 @@ def build_graph(
 ):
     """Compile the agent graph with the tool-call loop.
 
-    Args:
-        checkpointer: Working-memory checkpointer (Redis hot path; durable
-            Postgres path is used by suspended threads after handoff).
-        extra_tools: Additional :class:`langchain_core.tools.BaseTool`
-            instances to expose alongside :data:`AGENT_TOOLS`. Phase-2 P1
-            uses this to inject MCP-discovered tools.
-
-    Returns:
-        A compiled graph ready to ``ainvoke`` per turn. Callers pass
-        ``config={"configurable": {"thread_id": session_id, "llm_caller": ...}}``.
+    Uses closures (not functools.partial) for node wrappers so LangGraph's
+    signature inspector sees plain ``(state, config)`` functions and
+    correctly threads the config through every node.
     """
     bound_tools = list(AGENT_TOOLS) + list(extra_tools or [])
 
+    async def _agent(state: CustomerServiceState, config: RunnableConfig) -> dict[str, Any]:
+        return await agent_node(state, config, tools=bound_tools)
+
     graph = StateGraph(CustomerServiceState)
     graph.add_node(ENTER, enter_node)
-    graph.add_node(AGENT, partial(agent_node, tools=bound_tools))
+    graph.add_node(AGENT, _agent)
     graph.add_node(TOOLS, ToolNode(bound_tools))
     graph.add_node(EXIT, exit_node)
     graph.set_entry_point(ENTER)
