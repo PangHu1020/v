@@ -4,6 +4,8 @@
 
 跟踪基于 [backend/test/e2e/test_inbound_to_reply.py:test_full_round_trip](../backend/test/e2e/test_inbound_to_reply.py)，可视为可运行的"活文档"——任何代码改动都会被这个测试验证或暴露。
 
+Phase-2 后图变成 `enter → agent → [tools? → agent]* → exit → END`（条件循环），且 worker 在调用图前后多了 **挂起检查** 与 **interrupt 检查** 两个分支。Phase-2 后涉及的工具调用 / 接管路径在文末单列。
+
 ---
 
 ## 阶段 0：客户端发出加密 webhook
@@ -26,8 +28,7 @@ ciphertext 解密后是另一段内层 XML，含 `<FromUserName>`、`<MsgType>`�
 
 ## 阶段 1：FastAPI 入口 + 中间件
 
-[backend/app/main.py:create_app](../backend/app/main.py)
-↓ Uvicorn 接收 HTTP，路由到 `RequestIdMiddleware`
+[backend/app/main.py:create_app](../backend/app/main.py) → Uvicorn 接收 HTTP，路由到 `RequestIdMiddleware`
 
 [backend/app/gateway/middleware.py:RequestIdMiddleware.dispatch](../backend/app/gateway/middleware.py)
 
@@ -49,9 +50,7 @@ async def receive_event(request: Request, msg_signature, timestamp, nonce):
 
 ### 2.1 解析外层 XML 取 `<Encrypt>` 字段
 
-[backend/app/channels/wecom/router.py:_extract_encrypt](../backend/app/channels/wecom/router.py)
-↓ 调用 `_parse_xml(body)` → `xml.etree.ElementTree.fromstring`
-↓ 找到 `Encrypt` 子元素
+[backend/app/channels/wecom/router.py:_extract_encrypt](../backend/app/channels/wecom/router.py) → `xml.etree.ElementTree.fromstring`。
 
 ### 2.2 验证签名
 
@@ -69,22 +68,11 @@ return hmac.compare_digest(expected, msg_signature)
 
 [backend/app/channels/wecom/crypto.py:WecomCrypto.decrypt](../backend/app/channels/wecom/crypto.py)
 
-- base64 decode → ciphertext bytes
-- AES-256-CBC decrypt（key 来自 `EncodingAESKey + "="` 的 base64 解码，IV 是 key 前 16 字节）
-- PKCS7 unpad
-- 解析 envelope 头：`random(16) | msg_len(4 BE) | msg | corp_id`
-- 校验 `corp_id` 与配置匹配
-- 返回 `msg`（即内层 XML）
+- base64 decode → AES-256-CBC decrypt → PKCS7 unpad
+- envelope 头：`random(16) | msg_len(4 BE) | msg | corp_id`
+- 校验 `corp_id`，返回内层 XML
 
-### 2.4 解析内层 XML
-
-[backend/app/channels/wecom/router.py:_parse_xml](../backend/app/channels/wecom/router.py)
-
-提取 `MsgType`、`FromUserName`、`Content`、`MsgId` 等字段。
-
-非 `text` 类型直接返回 `success`，不入 bus（Phase-1 不处理图片/语音）。
-
-### 2.5 构造 SystemMessage
+### 2.4 解析内层 XML & 构造 SystemMessage
 
 ```python
 sys_msg = SystemMessage(
@@ -96,7 +84,7 @@ sys_msg = SystemMessage(
 )
 ```
 
-### 2.6 推入 debouncer
+### 2.5 推入 debouncer
 
 ```python
 with bind_request(request_id=..., channel="wecom", channel_user_id="ext-acceptance"):
@@ -108,121 +96,50 @@ return "success"
 
 ## 阶段 3：Debouncer 合并窗口
 
-[backend/app/channels/debounce.py:Debouncer.observe](../backend/app/channels/debounce.py)
-
-```python
-key = f"debounce:wecom:ext-acceptance"
-prior = await redis.hgetall(key)  # 空（首条消息）
-merged_text = "订单 ORD123 状态"
-merged_dedup = "1234567"
-await redis.hset(key, mapping={text, dedup_key, channel, ...})
-await redis.pexpire(key, 500 * 4)  # 防泄漏
-
-# 启动 500ms 后的 flush
-self._timers[key] = asyncio.create_task(self._flush_after_window(key))
-```
-
-如果 500ms 内有第二条消息进来，会取消上一个 task 并重启计时（这是 [backend/test/e2e/test_inbound_to_reply.py:test_burst_collapses_into_one_reply](../backend/test/e2e/test_inbound_to_reply.py) 验证的行为）。
-
-500ms 后 [Debouncer._flush_after_window](../backend/app/channels/debounce.py)：
-
-```python
-await asyncio.sleep(0.5)
-pending = await redis.hgetall(key)
-await redis.delete(key)
-merged = SystemMessage(...)
-await self._dispatch(merged)  # 这是注入的 channel_to_bus 函数
-```
+[backend/app/channels/debounce.py:Debouncer.observe](../backend/app/channels/debounce.py) — HSET 累积 + asyncio task 定时器；500ms 后 `_flush_after_window` 触发 `dispatch`（即 `BusProducer.enqueue`）。
 
 ---
 
 ## 阶段 4：进入 Bus
 
-`channel_to_bus` 在 [backend/app/main.py:lifespan](../backend/app/main.py) 里定义为闭包：
-
-```python
-async def channel_to_bus(message: SystemMessage) -> None:
-    await producer.enqueue(message)
-```
-
-[backend/app/bus/producer.py:BusProducer.enqueue](../backend/app/bus/producer.py)
-
-```python
-key = self._shard.stream_key("wecom", "ext-acceptance")
-# 内部：mmh3.hash("wecom:ext-acceptance") % 64 → shard_idx
-# key 格式 "bus:{shard_idx}"
-payload = message.model_dump_json().encode("utf-8")
-entry_id = await self._shard.xadd(key, {b"json": payload})
-```
-
-[backend/app/bus/shard.py:RedisStreamShard.xadd](../backend/app/bus/shard.py)
-→ Redis `XADD bus:42 * json <serialized>`
-
-返回的 entry_id 用于日志，函数到此返回；HTTP 响应早在 webhook 路由阶段已经回 200，整个入站完成。
+[backend/app/bus/producer.py:BusProducer.enqueue](../backend/app/bus/producer.py) → `mmh3.hash("wecom:ext-acceptance") % 64` → `XADD bus:{shard}` 一行。HTTP 200 早在阶段 2 就返回了，整条入站异步分离。
 
 ---
 
 ## 阶段 5：Bus Consumer 异步处理
 
-启动时 [backend/app/main.py:lifespan](../backend/app/main.py) 已经 `asyncio.create_task(consumer.run(handler))`，每个 shard 一个 task。
-
-### 5.1 BusConsumer._run_shard
-
-[backend/app/bus/consumer.py:BusConsumer._run_shard](../backend/app/bus/consumer.py)
-
-```python
-while not self._stop_event.is_set():
-    entries = await self._shard.xreadgroup(
-        group="workers", consumer="<host>:<id>",
-        keys=["bus:42"], count=1, block_ms=5000,
-    )
-    if not entries:
-        await asyncio.sleep(0.01)  # fakeredis 不阻塞，避免 hot-spin
-        continue
-    for stream_key, batch in entries:
-        for msg_id, fields in batch:
-            await self._dispatch(stream_key, msg_id, fields, handler)
-```
-
-### 5.2 BusConsumer._dispatch
-
-[backend/app/bus/consumer.py:BusConsumer._dispatch](../backend/app/bus/consumer.py)
-
-- 反序列化 `SystemMessage.model_validate_json(fields[b"json"])`
-- 反序列化失败 → `_send_to_dlq` + `xack`
-- 成功 → `bind_request(...)` 上下文 → 调用 handler
-- handler 抛异常 → `_send_to_dlq` + `xack`（保证不阻塞 stream）
-- 最后 `xack`
+[backend/app/bus/consumer.py:BusConsumer._run_shard](../backend/app/bus/consumer.py) `XREADGROUP block_ms=5000` → batch → `_dispatch` → 反序列化 `SystemMessage` → `bind_request` → 调 handler。失败入 DLQ + ack；成功 ack。
 
 ---
 
 ## 阶段 6：Worker handler
 
-handler 由 [backend/app/bus/worker.py:make_bus_handler](../backend/app/bus/worker.py) 构造，闭包绑定 graph、pool、redis、llm_caller、sends 等运行时依赖。
+handler 由 [backend/app/bus/worker.py:make_bus_handler](../backend/app/bus/worker.py) 构造的闭包。Phase-2 后多了挂起 / interrupt 两个分支。
 
 ### 6.1 解析 session_id
 
-[backend/app/bus/worker.py:_resolve_session_id](../backend/app/bus/worker.py)
+[backend/app/bus/worker.py:_resolve_session_id](../backend/app/bus/worker.py) — 30 分钟以内复用，否则 mint UUID。**首次 mint 时还会 INSERT `agent.session` 行**（`ON CONFLICT DO NOTHING`），让 on_interrupt 的 UPDATE 有目标。
+
+### 6.2 ⚠️ 挂起检查（Phase-2 P0）
+
+[backend/v/hooks/handoff.py:is_suspended](../backend/v/hooks/handoff.py)
 
 ```python
-last_seen_raw = await redis.get("last_seen:wecom:ext-acceptance")  # 首条 → None
-# silence 检查跳过
-session_id = str(uuid.uuid4())  # mint
-await redis.set("session:wecom:ext-acceptance", session_id, ex=3600)
-return session_id, True  # minted=True
+if handoff_enabled and await is_suspended(session_id, redis=redis):
+    thread_ts = await slack_outbound.get_thread_for_session(session_id)
+    if thread_ts:
+        await slack_outbound.post_customer_message(thread_ts=thread_ts, text=msg.text)
+    await _record_last_seen(...)
+    return  # ← 不调 graph
 ```
 
-### 6.2 加载 user_profile
+挂起期间客户继续发消息 → 直接转发到 Slack alert thread。
 
-[backend/v/hooks/session.py:on_session_start](../backend/v/hooks/session.py)
+### 6.3 加载 user_profile
 
-- 先查 Redis 缓存 `profile:wecom:ext-acceptance` → miss
-- [backend/v/memory/long_term.py:read_user_profile](../backend/v/memory/long_term.py) → `SELECT profile FROM agent.user_profile WHERE channel=$1 AND channel_user_id=$2`
-  - 测试中 mock 返回 `{"member_level": "黄金"}`
-- 写回 Redis 缓存（TTL 1800s）
-- 返回 `{"member_level": "黄金"}`
+[backend/v/hooks/session.py:on_session_start](../backend/v/hooks/session.py) — Redis 缓存 → PG 兜底 → 写回缓存。
 
-### 6.3 构造 state 并调用 graph
+### 6.4 构造 state + config 并调 graph
 
 ```python
 input_state = {
@@ -233,54 +150,90 @@ input_state = {
     "user_profile": {"member_level": "黄金"},
     "interrupt_payload": None,
 }
-config = {"configurable": {"thread_id": session_id, "llm_caller": llm_caller}}
+config = {
+    "configurable": {
+        "thread_id": session_id,
+        "llm_caller": llm_caller,
+        "pg_pool": pool,           # recall_memory 用
+        "embedder": embedder,       # recall_memory 用
+        "channel": msg.channel,
+        "channel_user_id": msg.channel_user_id,
+        "skill_registry": skill_registry,  # enter_node 用
+        "skill_top_k": 3,
+    }
+}
 final_state = await graph.ainvoke(input_state, config=config)
+```
+
+### 6.5 ⚠️ Interrupt 检查（Phase-2 P0）
+
+[backend/v/hooks/handoff.py:extract_interrupt](../backend/v/hooks/handoff.py)
+
+```python
+interrupt_payload = await extract_interrupt(final_state)
+# 读 final_state["__interrupt__"][0].value
+if interrupt_payload is not None:
+    await on_interrupt(...)  # 见阶段 10
+    return  # ← 不发普通回复
 ```
 
 ---
 
 ## 阶段 7：LangGraph 执行
 
-由 [backend/v/agents/graph.py:build_graph](../backend/v/agents/graph.py) 构造的线性图：`enter → agent → exit → END`，配 [RedisCheckpointer](../backend/v/memory/checkpointer.py)。
-
-### 7.1 ckpt.aget_tuple
-
-LangGraph 先查 [backend/v/memory/checkpointer.py:RedisCheckpointer.aget_tuple](../backend/v/memory/checkpointer.py)：
+[backend/v/agents/graph.py:build_graph](../backend/v/agents/graph.py) 构造的图：
 
 ```
-HGET ckpt:{thread_id} latest  → None（首次）
-return None
+enter → agent → route_after_agent → ┬→ tools → agent → ... → exit → END
+                                    └→ exit → END
 ```
 
-→ 从初始 state 开始执行。
+配 [RedisCheckpointer](../backend/v/agents/checkpointer.py)，热路径。
+
+### 7.1 ckpt.aget_tuple（首轮 → None）
+
+`HGET ckpt:{thread_id} latest` → 首次 `None` → 从初始 state 开始。
 
 ### 7.2 enter_node
 
 [backend/v/agents/nodes.py:enter_node](../backend/v/agents/nodes.py)
 
 ```python
-messages = state.get("messages", [])  # [HumanMessage(...)]
 if any(isinstance(m, SystemMessage) for m in messages):
-    return {}  # 跳过
-prompt = _system_prompt(profile, channel)
-# prompt 内容：客服角色 + channel + "已知客户档案: 会员等级：黄金"
-return {"messages": [SystemMessage(content=prompt)]}
+    return {}                                             # 后续轮跳过
+prompt = _system_prompt(profile, channel)                 # 基础客服 prompt + 客户档案
+skill_section = _maybe_skill_section(skill_registry,      # Phase-2 P4
+                                     query=last_human_text,
+                                     channel=channel,
+                                     top_k=3)
+full = f"{prompt}\n\n{skill_section}" if skill_section else prompt
+return {"messages": [SystemMessage(content=full)]}
 ```
 
-LangGraph 用 `add_messages` reducer 把 SystemMessage 追加到 messages 头部（实际是按 ID 合并，结果是 [Sys, Human]）。
+skill_section 内容形如：
 
-### 7.3 ckpt.aput（after enter_node）
+```
+以下 SOP 与本次咨询相关，按优先级排列，请优先遵循：
 
-`HSET ckpt:{thread_id} ck:{cid}:type ... ck:{cid}:blob ... latest <cid>`
-`EXPIRE ckpt:{thread_id} 1800`
+## refund_sop（退款流程）
+1. 询问订单号
+2. 确认订单状态 ...
+```
+
+### 7.3 ckpt.aput
+
+`HSET ckpt:{thread_id} ck:{cid}:type ... ck:{cid}:blob ... latest <cid>` + `EXPIRE 1800`.
 
 ### 7.4 agent_node
 
-[backend/v/agents/nodes.py:agent_node](../backend/v/agents/nodes.py)
+[backend/v/agents/nodes.py:agent_node](../backend/v/agents/nodes.py)（通过 `build_graph` 内的闭包包装传 `tools`）
 
 ```python
-caller = config["configurable"]["llm_caller"]
-result = await caller.chat("main_primary", state["messages"])
+result = await caller.chat(
+    "main_primary",
+    list(state["messages"]),
+    tools=[transfer_to_human, recall_memory, subagent, *mcp_tools],
+)
 return {"messages": [result.message]}
 ```
 
@@ -288,47 +241,51 @@ return {"messages": [result.message]}
 
 [backend/v/models/llm_caller.py:LLMCaller.chat](../backend/v/models/llm_caller.py)
 
-- `_resolve("main_primary")` → `"deepseek-chat-v4-pro"`
-- `_fallback_model_for("main_primary")` → `"deepseek-chat-v4-flash"`
-- 进 `_invoke`：
-  - [backend/v/models/factory.py:get_chat_model](../backend/v/models/factory.py) 构造 `ChatOpenAI(model=pro, base_url=DEEPSEEK_BASE, api_key=...)`
-  - `runnable = chat`（无 structured / tools）
-  - `result = await asyncio.wait_for(runnable.ainvoke(messages), timeout=30)`
-  - 返回 `LLMResult(message=AIMessage("您好，已收到您的咨询..."), model="...-pro", fallback_used=False, latency_ms=...)`
+- 解析 role → model id（`deepseek-chat-v4-pro`）
+- 用 `factory.get_chat_model(...)` 构造 `ChatOpenAI(base_url=DEEPSEEK_BASE, ...)` 并 `bind_tools(tools)`
+- `await asyncio.wait_for(runnable.ainvoke(messages), timeout=30)`
+- 返回 `LLMResult(message=..., model=..., fallback_used=False, latency_ms=...)`
 
-如果 primary 抛 `APITimeoutError` / `RateLimitError` / `InternalServerError` / `asyncio.TimeoutError`：
+降级规则见 [data_flow.md §2.4](data_flow.md)。
 
-- log `llm.primary_failed_falling_back`
-- 改用 fallback model 重新 `_invoke`
-- 都失败 → 抛原始 primary 错误
+### 7.6 路由判断
 
-测试里 `llm_caller.chat` 被 `AsyncMock` 替代，直接返回固定 `LLMResult`。
+[backend/v/agents/edges.py:route_after_agent](../backend/v/agents/edges.py)
 
-### 7.6 ckpt.aput（after agent_node）
+```python
+last = state["messages"][-1]
+return "tools" if isinstance(last, AIMessage) and last.tool_calls else "exit"
+```
 
-再写一次 checkpoint：包含 [Sys, Human, AI] 完整 messages。`latest` 指向新 cid。
+#### 7.6.a 命中 tools 分支
 
-### 7.7 exit_node
+`ToolNode([transfer_to_human, recall_memory, subagent, *mcp_tools])` 拿到 AIMessage 里的 `tool_calls`，按 name 路由到对应工具：
 
-[backend/v/agents/nodes.py:exit_node](../backend/v/agents/nodes.py)
-仅日志，无 state update。
+- `transfer_to_human` → 调 `langgraph.types.interrupt(...)` → **整个图暂停**，返回到阶段 6.5。
+- `recall_memory` → embed 查询 → pgvector cosine + 时间衰减 → 返回 top-K 文本。
+- `subagent` → 单轮 LLMCaller 调用（带或不带父 messages）。
+- `{server_id}__{tool}` → MCP `client.call_tool(...)`，结果走 L1+L2 缓存。
 
-### 7.8 END
+每个工具结果写为 `ToolMessage`，state.messages 追加，回到 `agent_node`。
 
-LangGraph 把整个 thread 的 final state 返回给 caller。
+LLM 看到工具结果后，可能再调工具或产出最终回复。直到不再产工具调用 → exit。
+
+#### 7.6.b exit 分支
+
+[backend/v/agents/nodes.py:exit_node](../backend/v/agents/nodes.py) — 只日志，无 state 更新 → END。
+
+### 7.7 ckpt.aput（每次节点结束）
+
+每跳一个节点都写一次 checkpoint，`latest` 滚动指向最新。`EXPIRE` 续约。
 
 ---
 
 ## 阶段 8：取最后 AIMessage 并出站
 
-[backend/app/bus/worker.py:_last_ai_message](../backend/app/bus/worker.py)
-
-倒序遍历 messages 找第一个 `AIMessage`，返回其 `content`。
-
-[backend/app/bus/worker.py:make_bus_handler](../backend/app/bus/worker.py) 闭包内：
+[backend/app/bus/worker.py:_last_ai_message](../backend/app/bus/worker.py) — 倒序找第一个有 content 且**没有 tool_calls** 的 AIMessage。
 
 ```python
-send = sends["wecom"]  # = WecomOutbound.send_text
+send = sends["wecom"]
 await send("ext-acceptance", "您好，已收到您的咨询...")
 ```
 
@@ -336,60 +293,95 @@ await send("ext-acceptance", "您好，已收到您的咨询...")
 
 [backend/app/channels/wecom/outbound.py:WecomOutbound.send_text](../backend/app/channels/wecom/outbound.py)
 
-```python
-token = await self._access_token()
-# 内部：asyncio.Lock + 内存 token cache
-# - 缓存命中 → 直接返回
-# - miss → GET /cgi-bin/gettoken?corpid=...&corpsecret=... → 缓存
+- 进程内 `asyncio.Lock` 拿 access_token（缓存命中直接用，否则 `gettoken`）
+- POST `/cgi-bin/message/send?access_token=...` 携带 `touser/msgtype=text/agentid/text.content`
 
-await self._client.post(
-    "/cgi-bin/message/send?access_token=...",
-    json={
-        "touser": "ext-acceptance",
-        "msgtype": "text",
-        "agentid": "1000002",
-        "text": {"content": "您好，..."},
-    },
-)
-```
-
-测试里这个 HTTP 调用被 `respx` 截获并断言 payload 正确。生产环境真正 hit 企业微信 API。
+测试里被 `respx` mock；生产真打 WeCom API。
 
 ### 8.2 记录 last_seen
 
 ```python
-await redis.set(
-    "last_seen:wecom:ext-acceptance",
-    str(time.time()),
-    ex=3600,
-)
+await redis.set("last_seen:wecom:ext-acceptance", str(time.time()), ex=3600)
 ```
 
 ---
 
 ## 阶段 9：Bus consumer 完成 ack
 
-回到 [BusConsumer._dispatch](../backend/app/bus/consumer.py)：
+回到 [BusConsumer._dispatch](../backend/app/bus/consumer.py)：`XACK bus:42 workers <msg_id>`。
+
+---
+
+## 阶段 10（仅当阶段 6.5 命中）：人工接管
+
+[backend/v/hooks/handoff.py:on_interrupt](../backend/v/hooks/handoff.py)
 
 ```python
-await self._shard.xack("bus:42", "workers", msg_id)
+async def on_interrupt(...):
+    # 1. migrate hot → cold
+    await migrate_hot_to_cold(session_id, redis_ckpt=..., pg_ckpt=...)
+    # 2. 标记 suspended
+    await redis.set(f"session_status:{session_id}", b"suspended", ex=...)
+    await pool.execute("UPDATE agent.session SET status='suspended' WHERE session_id=$1", session_id)
+    # 3. 推 Slack 告警（postMessage with Block Kit + Resume button）
+    thread_ts = await slack_outbound.post_handoff_alert(
+        session_id=..., channel=..., channel_user_id=...,
+        customer_text=..., transfer_reason=interrupt_payload["reason"],
+    )
+    # SlackOutbound 内部：
+    #   chat_postMessage → SET slack_thread:{ts}=session_id
+    #                      SET session_thread:{session_id}={channel_id, ts}
+    return thread_ts
 ```
 
-shard 上的下一条消息可以处理了。
+挂起期间客户消息走阶段 6.2，操作员消息走 [/operator/slack/events](../backend/app/operator/slack/router.py) → `on_operator_message` → 同时写 `operator_log:{session_id}` 列表 + 通过 channel adapter 转发给客户。
+
+操作员点 Slack "Resume AI" 按钮 → `/operator/slack/interactivity` → `on_resume`：
+
+```python
+async def on_resume(session_id, ...):
+    await migrate_cold_to_hot(session_id, ...)
+    await redis.set(f"session_status:{session_id}", b"active", ex=1800)
+    await pool.execute("UPDATE agent.session SET status='active' ...", session_id)
+
+    raw_msgs = await redis.lrange(f"operator_log:{session_id}", 0, -1)
+    operator_messages = [m.decode() for m in raw_msgs]
+    await redis.delete(f"operator_log:{session_id}")
+
+    decision = {"type": "resume", "operator_messages": operator_messages}
+    final_state = await graph.ainvoke(Command(resume=decision), config=...)
+    # interrupt() 内返回 decision → tool 返回格式化字符串 → agent 看到 ToolMessage →
+    # agent 产出 final AIMessage
+
+    reply = _last_ai_message(final_state["messages"])
+    await sends[channel](channel_user_id, reply)
+```
+
+详见 [data_flow.md §4](data_flow.md)。
 
 ---
 
 ## 总结：函数调用栈深度
 
-完整一次往返大约 **17 个跨模块函数调用**。耗时分布（粗估）：
+最简单的一轮（无工具调用、无接管）大约 **17 个跨模块函数调用**。
 
-| 阶段 | 耗时 |
+| 阶段 | 耗时（粗估） |
 | --- | --- |
 | HTTP → bus（同步路径） | < 50ms |
 | Debounce 窗口 | 500ms（几乎都是等） |
 | Bus 出队 + 反序列化 | < 5ms |
-| Session resolution + on_session_start | < 10ms（命中缓存 < 1ms） |
-| LangGraph turn（含两次 ckpt 写） | LLM 调用占 99%（DeepSeek 通常 1-3s） |
+| Session resolution + on_session_start | < 10ms（缓存命中 < 1ms） |
+| LangGraph turn（含 ckpt 写） | LLM 调用占 99%（DeepSeek 通常 1-3s） |
 | Outbound HTTP | 100-500ms |
 
-**LLM 调用是绝对瓶颈**——其余都在毫秒级。Phase-2 加 `recall_memory` 工具后会引入额外的向量检索（~10-50ms），但仍是 LLM 主导。
+工具调用增加：
+
+| 工具 | 增量 |
+| --- | --- |
+| `recall_memory` | embed (~50-200ms) + 一次 pgvector + 一次 update last_accessed_at（~10-50ms） |
+| `subagent` | 一次额外 LLM 调用（DeepSeek flash，1-2s） |
+| MCP（缓存命中） | < 1ms |
+| MCP（缓存未命中） | server 端往返（取决于 transport，stdio < 10ms / HTTP 100ms+） |
+| `transfer_to_human` | 工具内部立即 interrupt，graph 暂停；`on_interrupt` 串行做迁移 + Slack 告警（~200-500ms） |
+
+LLM 调用始终是绝对瓶颈。
