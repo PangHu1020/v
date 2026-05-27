@@ -34,6 +34,8 @@ from backend.v.cron import (
     push_ad,
     send_repurchase_reminders,
 )
+from backend.v.memory import extract_session_memory
+from backend.v.models.factory import get_embedding
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.utils.logging import configure as configure_logging
 from backend.v.utils.logging import get_logger
@@ -83,6 +85,7 @@ async def on_startup(ctx: dict[str, Any]) -> None:
                 "feishu": feishu_outbound.send_text,
             },
             "llm_caller": LLMCaller(settings.llm),
+            "embedder": get_embedding(settings.llm, settings.embedding),
             "ttl_seconds": settings.memory.working_ttl_seconds,
         }
     )
@@ -111,6 +114,7 @@ class WorkerSettings:
         notify_logistics_delivered,
         push_ad,
         consolidate_session,
+        extract_session_memory,
         _scheduled_repurchase_run,
     ]
     cron_jobs: ClassVar = [

@@ -39,6 +39,7 @@ from backend.v.agents.pg_checkpointer import open_pg_checkpointer
 from backend.v.configs import get_settings
 from backend.v.hooks.handoff import append_operator_log, on_resume
 from backend.v.mcp import MCPRegistry, MCPToolCache, parse_servers
+from backend.v.models.factory import get_embedding
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.utils.logging import configure as configure_logging
 from backend.v.utils.logging import get_logger
@@ -87,6 +88,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     redis_ckpt = RedisCheckpointer(redis, ttl_seconds=settings.memory.working_ttl_seconds)
     llm_caller = LLMCaller(settings.llm)
+    embedder = get_embedding(settings.llm, settings.embedding)
 
     # Phase-2 P1: MCP registry. Tools discovered here are bound to the
     # agent at graph build time, alongside transfer_to_human.
@@ -176,6 +178,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         slack_outbound=slack_outbound,
         redis_ckpt=redis_ckpt,
         pg_ckpt=pg_ckpt,
+        embedder=embedder,
     )
 
     consumer = BusConsumer(

@@ -144,6 +144,7 @@ def make_bus_handler(
     slack_outbound: HandoffNotifier | None = None,
     redis_ckpt: RedisCheckpointer | None = None,
     pg_ckpt: Any | None = None,
+    embedder: Any | None = None,
 ) -> Callable[[SystemMessage], Awaitable[None]]:
     """Build a bus consumer handler bound to the runtime dependencies.
 
@@ -155,6 +156,8 @@ def make_bus_handler(
         redis_ckpt / pg_ckpt: Required when ``slack_outbound`` is set, used
             by the on-interrupt hook to migrate the thread between hot and
             cold checkpointers.
+        embedder: Phase-2 P3. Forwarded into graph config so the
+            ``recall_memory`` tool can embed queries on demand.
     """
 
     handoff_enabled = slack_outbound is not None and redis_ckpt is not None and pg_ckpt is not None
@@ -219,6 +222,14 @@ def make_bus_handler(
                     "configurable": {
                         "thread_id": session_id,
                         "llm_caller": llm_caller,
+                        # Phase-2 P3: recall_memory tool needs the PG pool +
+                        # embedder + the customer's identity. We thread them
+                        # through configurable so any tool the agent calls
+                        # in this turn can reach them without a global.
+                        "pg_pool": pool,
+                        "embedder": embedder,
+                        "channel": msg.channel,
+                        "channel_user_id": msg.channel_user_id,
                     }
                 }
 
