@@ -129,6 +129,24 @@ class SlackSettings(BaseSettings):
         return bool(self.bot_token and self.signing_secret and self.handoff_channel_id)
 
 
+class MCPSettings(BaseSettings):
+    """Model Context Protocol client configuration (Phase-2 P1).
+
+    ``servers_json`` is a JSON-encoded list of server configs; each entry
+    matches :class:`MCPServerConfig`. Empty list disables MCP entirely.
+
+    Cache TTLs apply to non-write tool results; write-class tools
+    (declared per-server in ``write_tools``) skip the cache.
+    """
+
+    model_config = SettingsConfigDict(**_COMMON, env_prefix="MCP_")
+
+    servers_json: str = "[]"
+    cache_l1_ttl_seconds: int = Field(default=300, ge=0)
+    cache_l2_ttl_seconds: int = Field(default=86400, ge=0)
+    call_timeout_seconds: int = Field(default=30, ge=1)
+
+
 class AppSettings(BaseModel):
     """Composite settings handed to the FastAPI lifespan and to ``/v/`` modules."""
 
@@ -142,6 +160,7 @@ class AppSettings(BaseModel):
     wecom: WecomSettings
     feishu: FeishuSettings
     slack: SlackSettings
+    mcp: MCPSettings
 
 
 @lru_cache(maxsize=1)
@@ -163,4 +182,5 @@ def get_settings() -> AppSettings:
         wecom=WecomSettings(),
         feishu=FeishuSettings(),
         slack=SlackSettings(),
+        mcp=MCPSettings(),
     )
