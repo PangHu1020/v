@@ -15,14 +15,14 @@ from langchain_core.runnables import RunnableConfig
 
 from backend.v.agents.state import CustomerServiceState
 from backend.v.models.llm_caller import LLMCaller
-from backend.v.tools import recall_memory, transfer_to_human
+from backend.v.tools import recall_memory, subagent, transfer_to_human
 from backend.v.utils.logging import get_logger
 
 _log = get_logger("agents.nodes")
 
-AGENT_TOOLS: list = [transfer_to_human, recall_memory]
+AGENT_TOOLS: list = [transfer_to_human, recall_memory, subagent]
 """Tools bound to the main agent. Phase-2 P0 added ``transfer_to_human``;
-Phase-2 P3 added ``recall_memory``; Phase-2 P2 will add ``subagent``."""
+Phase-2 P3 added ``recall_memory`` and ``subagent``."""
 
 
 def _system_prompt(profile: dict[str, Any] | None, channel: str) -> str:
