@@ -38,6 +38,7 @@ from backend.v.agents.graph import build_graph
 from backend.v.agents.pg_checkpointer import open_pg_checkpointer
 from backend.v.configs import get_settings
 from backend.v.hooks.handoff import append_operator_log, on_resume
+from backend.v.mcp import MCPRegistry, MCPToolCache, parse_servers
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.utils.logging import configure as configure_logging
 from backend.v.utils.logging import get_logger
@@ -85,8 +86,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
 
     redis_ckpt = RedisCheckpointer(redis, ttl_seconds=settings.memory.working_ttl_seconds)
-    graph = build_graph(redis_ckpt)
     llm_caller = LLMCaller(settings.llm)
+
+    # Phase-2 P1: MCP registry. Tools discovered here are bound to the
+    # agent at graph build time, alongside transfer_to_human.
+    mcp_cache = MCPToolCache(
+        redis,
+        l1_ttl_seconds=settings.mcp.cache_l1_ttl_seconds,
+        l2_ttl_seconds=settings.mcp.cache_l2_ttl_seconds,
+    )
+    mcp_configs = parse_servers(settings.mcp.servers_json)
+    mcp_registry = MCPRegistry(
+        mcp_configs,
+        mcp_cache,
+        call_timeout_seconds=settings.mcp.call_timeout_seconds,
+    )
+    if mcp_configs:
+        await mcp_registry.connect_all()
+        _log.info("app.mcp.connected", tool_count=len(mcp_registry.tools))
+
+    graph = build_graph(redis_ckpt, extra_tools=mcp_registry.tools)
 
     sends = {
         "wecom": wecom_outbound.send_text,
@@ -181,6 +200,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.pg_ckpt = pg_ckpt
     app.state.graph = graph
     app.state.llm_caller = llm_caller
+    app.state.mcp_registry = mcp_registry
 
     # Mount channel routers now that adapters are constructed.
     app.include_router(build_wecom_router(settings.wecom, wecom_crypto, debouncer))
@@ -201,6 +221,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await slack_outbound.aclose()
         await wecom_outbound.aclose()
         await feishu_outbound.aclose()
+        await mcp_registry.aclose()
         await exit_stack.aclose()
         await close_client(redis)
         await close_pool(pg_pool)

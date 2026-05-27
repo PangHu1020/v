@@ -68,17 +68,27 @@ async def enter_node(state: CustomerServiceState) -> dict[str, Any]:
 async def agent_node(
     state: CustomerServiceState,
     config: RunnableConfig,
+    *,
+    tools: list[Any] | None = None,
 ) -> dict[str, Any]:
-    """Invoke the main-tier LLM and append its reply to ``messages``."""
+    """Invoke the main-tier LLM and append its reply to ``messages``.
+
+    The tool list is provided either explicitly (via :func:`functools.partial`
+    in :func:`backend.v.agents.graph.build_graph`) or implicitly via
+    :data:`AGENT_TOOLS`. The graph wires both the LLM binding and the
+    downstream ``ToolNode`` from the same list so what the LLM sees and
+    what gets dispatched are guaranteed identical.
+    """
     cfg = config.get("configurable", {}) if config else {}
     caller: LLMCaller | None = cfg.get("llm_caller")
     if caller is None:
         raise RuntimeError("agent_node requires config['configurable']['llm_caller']")
 
+    bound_tools = tools if tools is not None else AGENT_TOOLS
     result = await caller.chat(
         "main_primary",
         list(state.get("messages", [])),
-        tools=AGENT_TOOLS,
+        tools=bound_tools,
     )
     _log.info(
         "agents.agent_node.replied",
@@ -86,6 +96,7 @@ async def agent_node(
         fallback_used=result.fallback_used,
         latency_ms=result.latency_ms,
         has_tool_calls=bool(getattr(result.message, "tool_calls", None)),
+        tool_count=len(bound_tools),
     )
     return {"messages": [result.message]}
 

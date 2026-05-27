@@ -5,10 +5,18 @@ tool calls which dispatch through ``ToolNode``; the tool either returns a
 plain result (and the agent continues) or invokes ``interrupt(...)`` and
 suspends the graph for human handoff.
 
+Phase-2 P1 lets callers extend the bound tool list at compile time so MCP
+server tools can join ``transfer_to_human`` on the agent's tool surface.
+The same list is bound to the LLM and to ``ToolNode`` so the LLM's
+choices and the downstream dispatcher always agree.
+
     enter -> agent -> [tool_calls?] -> tools -> agent -> ... -> exit -> END
 """
 
 from __future__ import annotations
+
+from functools import partial
+from typing import Any
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, StateGraph
@@ -19,21 +27,30 @@ from backend.v.agents.nodes import AGENT_TOOLS, agent_node, enter_node, exit_nod
 from backend.v.agents.state import CustomerServiceState
 
 
-def build_graph(checkpointer: BaseCheckpointSaver):
+def build_graph(
+    checkpointer: BaseCheckpointSaver,
+    *,
+    extra_tools: list[Any] | None = None,
+):
     """Compile the agent graph with the tool-call loop.
 
     Args:
         checkpointer: Working-memory checkpointer (Redis hot path; durable
             Postgres path is used by suspended threads after handoff).
+        extra_tools: Additional :class:`langchain_core.tools.BaseTool`
+            instances to expose alongside :data:`AGENT_TOOLS`. Phase-2 P1
+            uses this to inject MCP-discovered tools.
 
     Returns:
         A compiled graph ready to ``ainvoke`` per turn. Callers pass
         ``config={"configurable": {"thread_id": session_id, "llm_caller": ...}}``.
     """
+    bound_tools = list(AGENT_TOOLS) + list(extra_tools or [])
+
     graph = StateGraph(CustomerServiceState)
     graph.add_node(ENTER, enter_node)
-    graph.add_node(AGENT, agent_node)
-    graph.add_node(TOOLS, ToolNode(AGENT_TOOLS))
+    graph.add_node(AGENT, partial(agent_node, tools=bound_tools))
+    graph.add_node(TOOLS, ToolNode(bound_tools))
     graph.add_node(EXIT, exit_node)
     graph.set_entry_point(ENTER)
     graph.add_edge(ENTER, AGENT)
