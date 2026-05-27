@@ -1,7 +1,9 @@
-"""Phase-1 LangGraph nodes: enter -> agent -> exit.
+"""LangGraph nodes: enter -> agent (with tools) -> exit.
 
-The graph is intentionally linear in Phase-1. Tools, conditional routing,
-and ``transfer_to_human`` interrupts are layered on in later phases.
+Phase-2 P0 binds the ``transfer_to_human`` tool so the agent can suspend
+the graph via :func:`langgraph.types.interrupt` when handoff is needed.
+The conditional edge in :mod:`backend.v.agents.graph` routes the agent's
+tool calls through ``ToolNode`` and back; tool-less responses go to exit.
 """
 
 from __future__ import annotations
@@ -13,9 +15,14 @@ from langchain_core.runnables import RunnableConfig
 
 from backend.v.agents.state import CustomerServiceState
 from backend.v.models.llm_caller import LLMCaller
+from backend.v.tools import transfer_to_human
 from backend.v.utils.logging import get_logger
 
 _log = get_logger("agents.nodes")
+
+AGENT_TOOLS: list = [transfer_to_human]
+"""Tools bound to the main agent. Phase-2 P3 adds ``recall_memory``;
+Phase-2 P2 adds ``subagent``."""
 
 
 def _system_prompt(profile: dict[str, Any] | None, channel: str) -> str:
@@ -68,12 +75,17 @@ async def agent_node(
     if caller is None:
         raise RuntimeError("agent_node requires config['configurable']['llm_caller']")
 
-    result = await caller.chat("main_primary", list(state.get("messages", [])))
+    result = await caller.chat(
+        "main_primary",
+        list(state.get("messages", [])),
+        tools=AGENT_TOOLS,
+    )
     _log.info(
         "agents.agent_node.replied",
         model=result.model,
         fallback_used=result.fallback_used,
         latency_ms=result.latency_ms,
+        has_tool_calls=bool(getattr(result.message, "tool_calls", None)),
     )
     return {"messages": [result.message]}
 
