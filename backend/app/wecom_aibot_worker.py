@@ -75,7 +75,7 @@ async def _outbound_subscriber(
         try:
             await pubsub.unsubscribe(pubsub_channel)
             await pubsub.aclose()
-        except Exception:
+        except Exception:  # noqa: S110 — shutdown teardown, ignore failures
             pass
 
 
@@ -141,7 +141,7 @@ async def main() -> None:
             t.cancel()
             try:
                 await t
-            except (asyncio.CancelledError, Exception):
+            except (asyncio.CancelledError, Exception):  # noqa: S110 — final shutdown
                 pass
         await close_client(redis)
 

@@ -106,7 +106,7 @@ class WecomAibotClient:
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=backoff)
                 break  # stop event fired during the backoff sleep
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
             backoff = min(backoff * 2, _BACKOFF_MAX)
 
@@ -117,7 +117,7 @@ class WecomAibotClient:
         if ws is not None:
             try:
                 await ws.close()
-            except Exception:
+            except Exception:  # noqa: S110 — shutting down, swallow close errors
                 pass
 
     async def send_text(self, channel_user_id: str, text: str) -> None:
