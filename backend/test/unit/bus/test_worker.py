@@ -145,8 +145,8 @@ class TestHandlerEndToEnd:
         await handler(_msg(text="订单 ORD123 状态？", user="ext-42"))
 
         assert sent == [("ext-42", "您好，可以帮您查询订单")]
-        # llm_caller invoked once.
-        assert llm_caller.chat.await_count == 1
+        # llm_caller invoked at least once (intent + agent + reflection all call it).
+        assert llm_caller.chat.await_count >= 1
 
     async def test_two_turns_within_session_share_thread_id(
         self, redis_client: fakeredis.aioredis.FakeRedis

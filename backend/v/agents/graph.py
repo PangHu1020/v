@@ -1,13 +1,12 @@
 """Compile the customer-service LangGraph.
 
-Phase-3 Group C inserts a ``compress`` node between ``enter`` and
-``agent``. The compression node is a no-op when working memory is below
-the configured token threshold; over the threshold it consolidates the
-session (writes 会话记忆 + 事件记忆) and replaces older messages with the
-freshly-written summary. Other turns the node returns ``{}`` and the
-graph proceeds straight to the agent.
+Phase-3 Group E adds intent classification and reflection:
 
-    enter -> compress -> agent -> [tool_calls?] -> tools -> agent -> ... -> exit -> END
+    enter -> compress -> intent -> agent -> [tool_calls?] -> tools -> agent
+                                                                         |
+                                                                      reflect
+                                                                     /      \\
+                                                                  agent    exit -> END
 """
 
 from __future__ import annotations
@@ -18,20 +17,28 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, StateGraph
-from langgraph.prebuilt import ToolNode
 
 from backend.v.agents.compression_node import compression_node
-from backend.v.agents.edges import AGENT, COMPRESS, ENTER, EXIT, TOOLS, route_after_agent
+from backend.v.agents.edges import (
+    AGENT,
+    COMPRESS,
+    ENTER,
+    EXIT,
+    INTENT,
+    REFLECT,
+    TOOLS,
+    route_after_agent,
+    route_after_reflect,
+)
+from backend.v.agents.intent_reflect import intent_node, reflection_node
 from backend.v.agents.nodes import AGENT_TOOLS, agent_node, enter_node, exit_node
 from backend.v.agents.state import CustomerServiceState
-from backend.v.hooks.tool_guard import (
-    evaluate_tool_calls,
-    update_error_counts,
-)
+from backend.v.hooks.tool_guard import evaluate_tool_calls, update_error_counts
 
 
 def _make_guarded_tools_node(bound_tools: list[Any]):
-    """Return a node that wraps ToolNode with dead-loop + circuit-breaker guards."""
+    from langgraph.prebuilt import ToolNode
+
     _tool_node = ToolNode(bound_tools)
 
     async def _guarded(state: CustomerServiceState, config: RunnableConfig) -> dict[str, Any]:
@@ -43,13 +50,9 @@ def _make_guarded_tools_node(bound_tools: list[Any]):
         fingerprints = list(state.get("tool_fingerprints") or [])
         error_counts = dict(state.get("tool_error_counts") or {})
         tool_calls = last.tool_calls
-
         new_fps, force = evaluate_tool_calls(tool_calls, fingerprints, error_counts)
 
         if force:
-            # Return error ToolMessages for all pending calls; agent_node
-            # will see force_handoff=True on the next pass and inject
-            # transfer_to_human.
             error_msgs = [
                 ToolMessage(
                     content="[tool_guard] 工具调用被安全机制阻止",
@@ -64,11 +67,7 @@ def _make_guarded_tools_node(bound_tools: list[Any]):
             }
 
         result = await _tool_node.ainvoke(state, config)
-        new_error_counts = update_error_counts(
-            tool_calls,
-            result.get("messages", []),
-            error_counts,
-        )
+        new_error_counts = update_error_counts(tool_calls, result.get("messages", []), error_counts)
         return {
             **result,
             "tool_fingerprints": fingerprints + new_fps,
@@ -83,7 +82,7 @@ def build_graph(
     *,
     extra_tools: list[Any] | None = None,
 ):
-    """Compile the agent graph with the compression + tool-call loop."""
+    """Compile the agent graph with intent routing + reflection."""
     bound_tools = list(AGENT_TOOLS) + list(extra_tools or [])
 
     async def _agent(state: CustomerServiceState, config: RunnableConfig) -> dict[str, Any]:
@@ -92,13 +91,17 @@ def build_graph(
     graph = StateGraph(CustomerServiceState)
     graph.add_node(ENTER, enter_node)
     graph.add_node(COMPRESS, compression_node)
+    graph.add_node(INTENT, intent_node)
     graph.add_node(AGENT, _agent)
     graph.add_node(TOOLS, _make_guarded_tools_node(bound_tools))
+    graph.add_node(REFLECT, reflection_node)
     graph.add_node(EXIT, exit_node)
     graph.set_entry_point(ENTER)
     graph.add_edge(ENTER, COMPRESS)
-    graph.add_edge(COMPRESS, AGENT)
-    graph.add_conditional_edges(AGENT, route_after_agent, {"tools": TOOLS, "exit": EXIT})
+    graph.add_edge(COMPRESS, INTENT)
+    graph.add_edge(INTENT, AGENT)
+    graph.add_conditional_edges(AGENT, route_after_agent, {"tools": TOOLS, "exit": REFLECT})
     graph.add_edge(TOOLS, AGENT)
+    graph.add_conditional_edges(REFLECT, route_after_reflect, {"agent": AGENT, "exit": EXIT})
     graph.add_edge(EXIT, END)
     return graph.compile(checkpointer=checkpointer)

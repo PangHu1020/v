@@ -1,0 +1,168 @@
+"""Intent classification + reflection nodes (Phase-3 Group E).
+
+**Intent node** — a cheap LLM call (flash tier) that classifies the
+customer's latest message into one of four intents. The result is stored
+in ``state["intent"]`` so ``enter_node`` can inject the matching SOP
+section and ``route_after_intent`` can direct the turn to the right
+agent variant.
+
+**Reflection node** — after the agent produces a reply, checks whether
+the reply references facts that are NOT present in any ToolMessage from
+this turn (the most common hallucination pattern in e-commerce CS). If
+the check fails the node sets ``state["reflection_retries"] += 1`` and
+routes back to ``agent``; after two failed retries it passes through
+unconditionally.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any, Literal
+
+from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
+from pydantic import BaseModel, Field
+
+from backend.v.agents.state import CustomerServiceState
+from backend.v.models.llm_caller import LLMCaller
+from backend.v.utils.logging import get_logger
+
+_log = get_logger("agents.intent_reflect")
+
+MAX_REFLECTION_RETRIES = 2
+
+# ── Intent classification ────────────────────────────────────────────────────
+
+Intent = Literal["refund", "logistics", "complaint", "general"]
+
+
+class IntentResult(BaseModel):
+    intent: Intent = "general"
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+_INTENT_SYSTEM = (
+    "你是一名意图分类助手。给定客户的最新消息，输出最匹配的意图。"
+    "只输出 JSON，不要解释。"
+    "意图选项：refund（退款/退货）、logistics（物流/快递/签收）、"
+    "complaint（投诉/不满）、general（其他）。"
+)
+
+
+async def intent_node(
+    state: CustomerServiceState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """Classify the customer's intent and store it in state."""
+    cfg = config.get("configurable", {}) if config else {}
+    caller: LLMCaller | None = cfg.get("llm_caller")
+    if caller is None:
+        return {"intent": "general"}
+
+    messages = state.get("messages", [])
+    # Find the latest HumanMessage text.
+    latest_text = ""
+    for m in reversed(messages):
+        if not isinstance(m, (SystemMessage, AIMessage, ToolMessage)):
+            latest_text = m.content if isinstance(m.content, str) else ""
+            break
+    if not latest_text:
+        return {"intent": "general"}
+
+    from langchain_core.messages import HumanMessage
+
+    prompt = [
+        SystemMessage(content=_INTENT_SYSTEM),
+        HumanMessage(content=f"客户消息：{latest_text}"),
+    ]
+    try:
+        result = await caller.chat("summary", prompt, structured=IntentResult)
+        payload = (
+            json.loads(result.message.content) if isinstance(result.message.content, str) else {}
+        )
+        ir = IntentResult.model_validate(payload)
+    except Exception as exc:
+        _log.warning("intent_node.failed", error=type(exc).__name__)
+        return {"intent": "general"}
+
+    _log.info("intent_node.classified", intent=ir.intent, confidence=ir.confidence)
+    return {"intent": ir.intent}
+
+
+# ── Reflection ───────────────────────────────────────────────────────────────
+
+
+class ReflectionResult(BaseModel):
+    passes: bool = True
+    issues: list[str] = Field(default_factory=list)
+
+
+_REFLECT_SYSTEM = (
+    "你是一名事实核查助手。给定 AI 助手的回复和本轮工具调用的结果，"
+    "判断回复中是否引用了工具结果里没有的事实（幻觉）。"
+    '只输出 JSON：{"passes": true/false, "issues": ["..."]}'
+)
+
+
+def _collect_tool_facts(messages: list) -> str:
+    """Concatenate all ToolMessage contents from the current turn."""
+    facts: list[str] = []
+    for m in messages:
+        if isinstance(m, ToolMessage):
+            content = m.content if isinstance(m.content, str) else str(m.content)
+            if content and not content.startswith("[tool_guard]"):
+                facts.append(content)
+    return "\n".join(facts) or "（本轮无工具调用结果）"
+
+
+def _last_ai_reply(messages: list) -> str:
+    for m in reversed(messages):
+        if isinstance(m, AIMessage) and not getattr(m, "tool_calls", None):
+            return m.content if isinstance(m.content, str) else ""
+    return ""
+
+
+async def reflection_node(
+    state: CustomerServiceState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """Check the agent's reply for hallucinations; retry if needed."""
+    retries = int(state.get("reflection_retries") or 0)
+    if retries >= MAX_REFLECTION_RETRIES:
+        _log.info("reflection_node.max_retries_reached")
+        return {}
+
+    cfg = config.get("configurable", {}) if config else {}
+    caller: LLMCaller | None = cfg.get("llm_caller")
+    if caller is None:
+        return {}
+
+    messages = state.get("messages", [])
+    reply = _last_ai_reply(messages)
+    if not reply:
+        return {}
+
+    tool_facts = _collect_tool_facts(messages)
+
+    from langchain_core.messages import HumanMessage
+
+    prompt = [
+        SystemMessage(content=_REFLECT_SYSTEM),
+        HumanMessage(content=(f"工具结果：\n{tool_facts}\n\nAI 回复：\n{reply}")),
+    ]
+    try:
+        result = await caller.chat("summary", prompt, structured=ReflectionResult)
+        payload = (
+            json.loads(result.message.content) if isinstance(result.message.content, str) else {}
+        )
+        rr = ReflectionResult.model_validate(payload)
+    except Exception as exc:
+        _log.warning("reflection_node.failed", error=type(exc).__name__)
+        return {}
+
+    if rr.passes:
+        _log.info("reflection_node.passed")
+        return {}
+
+    _log.warning("reflection_node.failed_check", issues=rr.issues, retry=retries + 1)
+    return {"reflection_retries": retries + 1, "reflection_failed": True}

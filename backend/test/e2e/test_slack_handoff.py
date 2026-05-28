@@ -194,23 +194,23 @@ class TestHandoffAcceptance:
             tool_call_msg.tool_calls = tool_call_msg.tool_calls  # touch for langchain
             final_msg = AIMessage(content="按操作员意见已为您处理，您还有其他问题吗？")
 
-            chat_results = [
-                LLMResult(
-                    message=tool_call_msg,
-                    model="m",
-                    role="main_primary",
-                    fallback_used=False,
-                    latency_ms=1,
-                ),
-                LLMResult(
-                    message=final_msg,
-                    model="m",
-                    role="main_primary",
-                    fallback_used=False,
-                    latency_ms=1,
-                ),
-            ]
-            llm_caller.chat = AsyncMock(side_effect=chat_results)
+            # intent_node + reflection_node call chat with role="summary";
+            # agent_node calls with role="main_primary". Use a plain async
+            # function so the routing is explicit and no iterator runs out.
+            _main_call_count = [0]
+
+            async def _smart_chat(role, *args, **kwargs):
+                if role != "main_primary":
+                    return LLMResult(
+                        message=AIMessage(content='{"intent":"general","confidence":0.9}'),
+                        model="m", role=role, fallback_used=False, latency_ms=1,
+                    )
+                _main_call_count[0] += 1
+                msg = tool_call_msg if _main_call_count[0] == 1 else final_msg
+                return LLMResult(message=msg, model="m", role="main_primary",
+                                 fallback_used=False, latency_ms=1)
+
+            llm_caller.chat = _smart_chat
 
             sent: list[tuple[str, str]] = []
 
@@ -268,8 +268,8 @@ class TestHandoffAcceptance:
                 await handler(_msg("急啊"))
 
                 assert len(slack.thread_messages) == 2
-                # No graph invocations beyond the first.
-                assert llm_caller.chat.await_count == 1
+                # No graph invocations beyond the first (verified by main_call_count).
+                assert _main_call_count[0] == 1
 
                 # --- Step 3: operator replies in Slack thread ---
                 # In production the Slack router calls our on_operator_message

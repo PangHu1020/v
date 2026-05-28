@@ -49,3 +49,10 @@ class CustomerServiceState(TypedDict, total=False):
     """Set by the tool guard when a loop or circuit-open condition is
     detected. ``agent_node`` checks this and injects a
     ``transfer_to_human`` call instead of asking the LLM."""
+    # Phase-3 Group E: intent routing + reflection
+    intent: str
+    """Classified intent from ``intent_node``: refund / logistics / complaint / general."""
+    reflection_retries: int
+    """How many reflection retries have fired this turn."""
+    reflection_failed: bool
+    """Set by ``reflection_node`` when the check fails; cleared on retry."""
