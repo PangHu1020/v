@@ -183,6 +183,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "event_ttl_days": settings.memory.event_ttl_days,
     }
 
+    from backend.v.agents.emotion import (
+        HttpEmotionDetector,
+        KeywordEmotionDetector,
+    )
+
+    emotion_detector = (
+        HttpEmotionDetector(settings.memory.emotion_service_url)
+        if settings.memory.emotion_service_url
+        else KeywordEmotionDetector()
+    )
+
     handler = make_bus_handler(
         graph=graph,
         pool=pg_pool,
@@ -203,6 +214,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         token_model=settings.llm.main_primary,
         consolidate_callable=consolidate_session,
         consolidate_ctx=consolidate_ctx,
+        emotion_detector=emotion_detector,
+        emotion_threshold=settings.memory.emotion_threshold,
     )
 
     consumer = BusConsumer(

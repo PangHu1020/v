@@ -76,7 +76,9 @@ class TestCheckLoop:
 
 class TestIsCircuitOpen:
     def test_below_threshold(self) -> None:
-        assert is_circuit_open({"recall_memory": CIRCUIT_OPEN_THRESHOLD - 1}, "recall_memory") is False
+        assert (
+            is_circuit_open({"recall_memory": CIRCUIT_OPEN_THRESHOLD - 1}, "recall_memory") is False
+        )
 
     def test_at_threshold(self) -> None:
         assert is_circuit_open({"recall_memory": CIRCUIT_OPEN_THRESHOLD}, "recall_memory") is True

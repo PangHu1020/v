@@ -203,12 +203,16 @@ class TestHandoffAcceptance:
                 if role != "main_primary":
                     return LLMResult(
                         message=AIMessage(content='{"intent":"general","confidence":0.9}'),
-                        model="m", role=role, fallback_used=False, latency_ms=1,
+                        model="m",
+                        role=role,
+                        fallback_used=False,
+                        latency_ms=1,
                     )
                 _main_call_count[0] += 1
                 msg = tool_call_msg if _main_call_count[0] == 1 else final_msg
-                return LLMResult(message=msg, model="m", role="main_primary",
-                                 fallback_used=False, latency_ms=1)
+                return LLMResult(
+                    message=msg, model="m", role="main_primary", fallback_used=False, latency_ms=1
+                )
 
             llm_caller.chat = _smart_chat
 

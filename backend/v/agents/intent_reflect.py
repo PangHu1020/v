@@ -23,6 +23,7 @@ from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 
+from backend.v.agents.emotion import EmotionDetector
 from backend.v.agents.state import CustomerServiceState
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.utils.logging import get_logger
@@ -53,7 +54,14 @@ async def intent_node(
     state: CustomerServiceState,
     config: RunnableConfig,
 ) -> dict[str, Any]:
-    """Classify the customer's intent and store it in state."""
+    """Classify the customer's intent; pre-empt to handoff if very angry.
+
+    If an :class:`EmotionDetector` is provided via
+    ``config["configurable"]["emotion_detector"]`` AND the customer's
+    latest message exceeds the ``emotion_threshold`` (also in config,
+    default 0.80), this node sets ``force_handoff=True`` immediately so
+    ``agent_node`` injects ``transfer_to_human`` without calling the LLM.
+    """
     cfg = config.get("configurable", {}) if config else {}
     caller: LLMCaller | None = cfg.get("llm_caller")
     if caller is None:
@@ -68,6 +76,20 @@ async def intent_node(
             break
     if not latest_text:
         return {"intent": "general"}
+
+    # ── Emotion pre-emption (before LLM call, so no tokens burned) ──────────
+    detector: EmotionDetector | None = cfg.get("emotion_detector")
+    if detector is not None:
+        from backend.v.agents.emotion import should_preempt_handoff
+
+        threshold = float(cfg.get("emotion_threshold", 0.80))
+        try:
+            if await should_preempt_handoff(latest_text, detector=detector, threshold=threshold):
+                _log.info("intent_node.emotion_preempt")
+                return {"intent": "complaint", "force_handoff": True}
+        except Exception as exc:
+            _log.warning("intent_node.emotion_failed", error=type(exc).__name__)
+    # ────────────────────────────────────────────────────────────────────────
 
     from langchain_core.messages import HumanMessage
 

@@ -153,6 +153,8 @@ def make_bus_handler(
     token_model: str | None = None,
     consolidate_callable: Any | None = None,
     consolidate_ctx: dict[str, Any] | None = None,
+    emotion_detector: Any | None = None,
+    emotion_threshold: float = 0.80,
 ) -> Callable[[SystemMessage], Awaitable[None]]:
     """Build a bus consumer handler bound to the runtime dependencies.
 
@@ -272,6 +274,9 @@ def make_bus_handler(
                         "compression_threshold_tokens": compression_threshold_tokens,
                         "compression_keep_recent_messages": compression_keep_recent_messages,
                         "token_model": token_model,
+                        # Phase-3 Group F: emotion pre-emption.
+                        "emotion_detector": emotion_detector,
+                        "emotion_threshold": emotion_threshold,
                         "consolidate_callable": consolidate_callable,
                         "consolidate_ctx": consolidate_ctx,
                     }

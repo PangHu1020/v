@@ -101,6 +101,12 @@ class MemorySettings(BaseSettings):
     compression_keep_recent_messages: int = Field(default=4, ge=1)
     """When compression fires, how many trailing messages to keep verbatim
     (so the agent still has the immediate exchange in full fidelity)."""
+    emotion_threshold: float = Field(default=0.80, ge=0.0, le=1.0)
+    """Anger/frustration score above which the graph skips the LLM and
+    pre-empts directly to transfer_to_human. Set to 1.0 to disable."""
+    emotion_service_url: str = ""
+    """HTTP endpoint for a remote emotion BERT model. Empty means the in-
+    process keyword scorer is used instead (Phase-3 Group F default)."""
 
 
 class BusSettings(BaseSettings):
