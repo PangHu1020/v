@@ -33,7 +33,7 @@ import redis.asyncio as redis_async
 from langchain_core.messages import AIMessage, HumanMessage
 
 from backend.app.bus.messages import SystemMessage
-from backend.v.agents.checkpointer import RedisCheckpointer
+from backend.v.agents.checkpoints.redis import RedisCheckpointer
 from backend.v.agents.state import CustomerServiceState
 from backend.v.hooks.handoff import (
     HandoffNotifier,

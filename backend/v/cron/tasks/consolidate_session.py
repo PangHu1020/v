@@ -31,7 +31,7 @@ import redis.asyncio as redis_async
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
-from backend.v.agents.checkpointer import RedisCheckpointer
+from backend.v.agents.checkpoints.redis import RedisCheckpointer
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.utils.logging import bind_request, get_logger
 

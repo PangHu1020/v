@@ -20,7 +20,7 @@ from langchain_core.messages import AIMessage
 
 from backend.app.bus.messages import SystemMessage
 from backend.app.bus.worker import _resolve_session_id, make_bus_handler
-from backend.v.agents.checkpointer import RedisCheckpointer
+from backend.v.agents.checkpoints.redis import RedisCheckpointer
 from backend.v.agents.graph import build_graph
 from backend.v.models.llm_caller import LLMResult
 

@@ -9,7 +9,7 @@ import fakeredis.aioredis
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from backend.v.agents.checkpointer import RedisCheckpointer
+from backend.v.agents.checkpoints.redis import RedisCheckpointer
 from backend.v.agents.graph import build_graph
 from backend.v.models.llm_caller import LLMResult
 

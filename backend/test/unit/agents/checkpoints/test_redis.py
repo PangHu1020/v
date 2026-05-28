@@ -1,4 +1,4 @@
-"""Unit tests for ``backend.v.agents.checkpointer``."""
+"""Unit tests for ``backend.v.agents.checkpoints.redis``."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import pytest
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
 
-from backend.v.agents.checkpointer import RedisCheckpointer
+from backend.v.agents.checkpoints.redis import RedisCheckpointer
 
 
 @pytest.fixture

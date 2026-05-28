@@ -2,8 +2,8 @@
 
 Lives under ``agents`` because the checkpointer is part of the agent's
 runtime (graph state durability), not user memory. The companion durable
-checkpointer is :mod:`backend.v.agents.pg_checkpointer`; the migration
-helpers between them live in :mod:`backend.v.agents.checkpointer_migration`.
+checkpointer is :mod:`backend.v.agents.checkpoints.postgres`; the migration
+helpers between them live in :mod:`backend.v.agents.checkpoints.migration`.
 
 Stores all checkpoints for a thread in a single Redis hash and refreshes
 the TTL on every write. Phase-2 ``transfer_to_human`` flow migrates

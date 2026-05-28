@@ -21,9 +21,9 @@ import pytest
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
 
-from backend.v.agents.checkpointer import RedisCheckpointer
-from backend.v.agents.checkpointer_migration import migrate_cold_to_hot, migrate_hot_to_cold
-from backend.v.agents.pg_checkpointer import open_pg_checkpointer
+from backend.v.agents.checkpoints.migration import migrate_cold_to_hot, migrate_hot_to_cold
+from backend.v.agents.checkpoints.postgres import open_pg_checkpointer
+from backend.v.agents.checkpoints.redis import RedisCheckpointer
 
 PG_TEST_HOST = os.environ.get("PG_TEST_HOST", "localhost")
 PG_TEST_PORT = int(os.environ.get("PG_TEST_PORT", "5433"))

@@ -25,7 +25,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
 
-from backend.v.agents.checkpointer import RedisCheckpointer
+from backend.v.agents.checkpoints.redis import RedisCheckpointer
 from backend.v.hooks.handoff import (
     append_operator_log,
     extract_interrupt,
@@ -266,7 +266,7 @@ class TestOnResume:
 
         # Simulate the on_interrupt step: migrate hot -> cold so the resume
         # hook later has to pull state back out of cold.
-        from backend.v.agents.checkpointer_migration import migrate_hot_to_cold
+        from backend.v.agents.checkpoints.migration import migrate_hot_to_cold
 
         await migrate_hot_to_cold("s-resume", redis_ckpt=hot_ckpt, pg_ckpt=cold_ckpt)
 

@@ -1,4 +1,4 @@
-"""Unit tests for ``backend.v.agents.checkpointer_migration``.
+"""Unit tests for ``backend.v.agents.checkpoints.migration``.
 
 Uses two ``RedisCheckpointer`` instances backed by separate fakeredis
 clients (one acts as "hot", the other as "cold"). The migration helpers
@@ -15,8 +15,8 @@ import pytest
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
 
-from backend.v.agents.checkpointer import RedisCheckpointer
-from backend.v.agents.checkpointer_migration import migrate_cold_to_hot, migrate_hot_to_cold
+from backend.v.agents.checkpoints.migration import migrate_cold_to_hot, migrate_hot_to_cold
+from backend.v.agents.checkpoints.redis import RedisCheckpointer
 
 
 @pytest.fixture

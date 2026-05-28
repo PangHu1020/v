@@ -33,9 +33,9 @@ from backend.app.gateway.routers import health
 from backend.app.operator.slack.outbound import SlackOutbound
 from backend.app.operator.slack.router import build_router as build_slack_router
 from backend.app.store import close_client, close_pool, create_client, create_pool
-from backend.v.agents.checkpointer import RedisCheckpointer
+from backend.v.agents.checkpoints.postgres import open_pg_checkpointer
+from backend.v.agents.checkpoints.redis import RedisCheckpointer
 from backend.v.agents.graph import build_graph
-from backend.v.agents.pg_checkpointer import open_pg_checkpointer
 from backend.v.configs import get_settings
 from backend.v.hooks.handoff import append_operator_log, on_resume
 from backend.v.mcp import MCPRegistry, MCPToolCache, parse_servers

@@ -16,23 +16,13 @@ next run cleans up. The cost of a duplicate checkpoint is negligible.
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any
 
-from backend.v.agents.checkpointer import RedisCheckpointer
+from backend.v.agents.checkpoints.protocol import AsyncCheckpointer
+from backend.v.agents.checkpoints.redis import RedisCheckpointer
 from backend.v.utils.logging import get_logger
 
 _log = get_logger("memory.migration")
-
-
-class _AsyncCheckpointer(Protocol):
-    """Subset of BaseCheckpointSaver we use here. Lets us avoid a hard
-    import dependency on AsyncPostgresSaver in tests that use stubs."""
-
-    async def aput(self, config, checkpoint, metadata, new_versions): ...
-    async def aput_writes(self, config, writes, task_id, task_path=""): ...
-    async def aget_tuple(self, config): ...
-    def alist(self, config, *, filter=None, before=None, limit=None): ...
-    async def adelete_thread(self, thread_id: str) -> None: ...
 
 
 def _config(thread_id: str, checkpoint_id: str | None = None) -> dict[str, Any]:
@@ -44,8 +34,8 @@ def _config(thread_id: str, checkpoint_id: str | None = None) -> dict[str, Any]:
 
 async def _replay(
     *,
-    src: _AsyncCheckpointer,
-    dst: _AsyncCheckpointer,
+    src: AsyncCheckpointer,
+    dst: AsyncCheckpointer,
     thread_id: str,
 ) -> int:
     """Replay all checkpoints for ``thread_id`` from ``src`` into ``dst``."""
@@ -68,7 +58,7 @@ async def migrate_hot_to_cold(
     thread_id: str,
     *,
     redis_ckpt: RedisCheckpointer,
-    pg_ckpt: _AsyncCheckpointer,
+    pg_ckpt: AsyncCheckpointer,
 ) -> int:
     """Move a thread from Redis (hot) to Postgres (cold).
 
@@ -89,7 +79,7 @@ async def migrate_hot_to_cold(
 async def migrate_cold_to_hot(
     thread_id: str,
     *,
-    pg_ckpt: _AsyncCheckpointer,
+    pg_ckpt: AsyncCheckpointer,
     redis_ckpt: RedisCheckpointer,
 ) -> int:
     """Move a thread from Postgres (cold) back to Redis (hot)."""

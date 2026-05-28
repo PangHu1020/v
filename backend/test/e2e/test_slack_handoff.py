@@ -38,9 +38,9 @@ from langchain_core.messages import AIMessage
 from backend.app.bus.messages import SystemMessage
 from backend.app.bus.worker import make_bus_handler
 from backend.app.operator.slack.outbound import SlackOutbound
-from backend.v.agents.checkpointer import RedisCheckpointer
+from backend.v.agents.checkpoints.postgres import open_pg_checkpointer
+from backend.v.agents.checkpoints.redis import RedisCheckpointer
 from backend.v.agents.graph import build_graph
-from backend.v.agents.pg_checkpointer import open_pg_checkpointer
 from backend.v.hooks.handoff import append_operator_log
 from backend.v.models.llm_caller import LLMResult
 
@@ -287,7 +287,7 @@ class TestHandoffAcceptance:
                 # we verify the migration + status flip; the surface contract
                 # of "AI's final reply gets sent to the customer" is asserted
                 # in those unit tests with a simpler graph.
-                from backend.v.agents.checkpointer_migration import migrate_cold_to_hot
+                from backend.v.agents.checkpoints.migration import migrate_cold_to_hot
 
                 await migrate_cold_to_hot(session_id, pg_ckpt=pg_ckpt, redis_ckpt=redis_ckpt)
 

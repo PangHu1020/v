@@ -29,8 +29,8 @@ import asyncpg
 import redis.asyncio as redis_async
 from langgraph.types import Command
 
-from backend.v.agents.checkpointer import RedisCheckpointer
-from backend.v.agents.checkpointer_migration import migrate_cold_to_hot, migrate_hot_to_cold
+from backend.v.agents.checkpoints.migration import migrate_cold_to_hot, migrate_hot_to_cold
+from backend.v.agents.checkpoints.redis import RedisCheckpointer
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.utils.logging import bind_request, get_logger
 
