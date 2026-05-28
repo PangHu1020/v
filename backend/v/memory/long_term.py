@@ -1,8 +1,10 @@
-"""Long-term memory reads (Phase-1).
+"""Long-term memory reads (Phase-2 P3 / Phase-3 layer 3).
 
-Only the read path against ``agent.user_profile`` lands in Phase-1 to keep
-the on-session-start hook honest. The write path (driven by the
-``memory_extractor`` background analyst) is Phase-2.
+Owns just the ``agent.user_profile`` table — the truly-permanent layer.
+
+Medium-term event memory (``agent.session_memory``) reads moved to
+:mod:`backend.v.memory.event_memory` in Phase-3 Group C so each layer
+of the temperature gradient lives in its own module.
 """
 
 from __future__ import annotations

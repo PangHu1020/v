@@ -1,24 +1,27 @@
-"""Session-memory consolidation.
+"""Session consolidation: short-term + medium-term memory writes.
 
-Phase-1 left the working-memory hot path (Redis checkpointer with 30-min
-TTL) writing nothing to ``agent.session_memory`` — when the TTL fired or
-the customer went silent, the session evaporated. This task closes that
-gap.
+Phase-3 reshape of Phase-2's consolidator. One LLM call still does the
+heavy lifting; what changes is the **output shape** (now feeds two
+layers) and the **trigger semantics** (mid-session compression also
+calls in here).
 
-Triggered in two ways:
+The 三层温度梯度 design:
 
-- :func:`backend.app.bus.worker` schedules a delayed ARQ job at
-  ``TTL - 60s`` whenever a session reaches a context-length threshold
-  or naturally idles toward expiry (Phase-2 P2 hook addition).
-- A periodic ARQ cron sweeps Redis for sessions whose ``last_seen`` is
-  older than 25 minutes and consolidates them (catch-all for missed
-  schedules across worker restarts).
+- 会话记忆（短期，Redis） — :func:`backend.v.memory.session_memory.write_session_memory`.
+  Holds preferences + observations the LLM extracted from this session;
+  consumed at session-end promotion (固化) and by the mid-session
+  compression node when it re-injects personalization context.
+- 事件记忆（中期，PG，30 天）— ``agent.session_memory`` row. Holds
+  narrative + intents + key_facts + sentiment + unresolved; consumed at
+  next-session ``on_session_start`` injection.
 
-The summary is produced by ``LLMCaller`` with ``role="summary"``
-(DeepSeek flash) using a structured Pydantic output. It includes a
-short narrative + key facts (intents, decisions, customer state) so the
-``memory_extractor`` (Phase-2 P3) can promote them into long-term
-``user_profile`` / ``memory_episodes`` later.
+The session-end promotion to long-term ``user_profile`` is owned by
+:mod:`backend.v.memory.memory_extractor` and runs only when the session
+truly closes (not on every compression).
+
+Returns the new ``agent.session_memory.id`` so callers (e.g., a
+``compression_node``) can fetch the row back if they need the rendered
+narrative.
 """
 
 from __future__ import annotations
@@ -32,20 +35,25 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from pydantic import BaseModel, Field
 
 from backend.v.agents.checkpoints.redis import RedisCheckpointer
+from backend.v.memory.session_memory import write_session_memory
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.utils.logging import bind_request, get_logger
 
 _log = get_logger("cron.consolidate_session")
 
+DEFAULT_EVENT_TTL_DAYS = 30
 
-class SessionSummary(BaseModel):
-    """Structured output of the consolidate prompt.
 
-    Designed so the Phase-2 P3 ``memory_extractor`` can map fields
-    directly into ``agent.user_profile`` / ``agent.memory_episodes``
-    without re-prompting the LLM.
+class SessionExtraction(BaseModel):
+    """Structured output of the consolidation prompt.
+
+    Two halves: the medium-term ``事件记忆`` columns (narrative …
+    unresolved) and the short-term ``会话记忆`` columns (preferences,
+    observations). The session-end promotion later decides which of the
+    short-term preferences cross over into the long-term ``user_profile``.
     """
 
+    # 事件记忆 (medium-term, PG agent.session_memory)
     narrative: str = Field(description="One paragraph summary of the session, in Chinese.")
     intents: list[str] = Field(
         default_factory=list,
@@ -64,11 +72,35 @@ class SessionSummary(BaseModel):
         description="Any items left unresolved at the end of the session.",
     )
 
+    # 会话记忆 (short-term, Redis session_memory)
+    preferences: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Actionable preferences the agent should respect for the rest "
+            'of THIS session. Examples: {"preferred_courier": "顺丰", '
+            '"language": "普通话"}. Only include items the customer '
+            "stated or strongly implied this session."
+        ),
+    )
+    observations: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Free-form short observations about the current state — tone, "
+            "urgency, special context. Used by the compression node to "
+            "preserve agent persona across compressed turns."
+        ),
+    )
+
 
 _SUMMARIZE_SYSTEM_PROMPT = (
-    "你是一名客服会话归档助手。给定一段客服与客户的对话，提取关键信息以便长期记忆。"
-    "用简洁、客观的中文产出。narrative 不超过 120 字。"
-    "key_facts 是结构化的事实，不是评价。"
+    "你是一名客服会话归档助手。给定一段客服与客户的对话，提取信息以便分层记忆系统使用。"
+    "请用简洁、客观的中文产出。\n\n"
+    "事件记忆字段（narrative / intents / key_facts / sentiment / unresolved）"
+    "用来作为本次会话的中期摘要：narrative 不超过 120 字、key_facts 是事实不是评价。\n\n"
+    "会话记忆字段（preferences / observations）"
+    "用来在本次会话内辅助 agent，不参与跨会话固化决策："
+    "preferences 是客户当下表达的偏好键值对（语言、收货时段、称呼等），"
+    "observations 是当前会话的语气 / 紧急度 / 特殊场景等观察点。\n\n"
     "若信息不足，相关字段留空，不要编造。"
 )
 
@@ -78,13 +110,12 @@ def _format_history(messages: list[BaseMessage]) -> str:
     parts: list[str] = []
     for m in messages:
         if isinstance(m, SystemMessage):
-            continue  # Skip the system prompt itself; not part of the conversation.
+            continue
         if isinstance(m, HumanMessage):
             role = "客户"
         elif isinstance(m, AIMessage):
             tool_calls = getattr(m, "tool_calls", None)
             if tool_calls:
-                # Tool calls don't read well in transcripts; summarize them.
                 names = ", ".join(tc.get("name", "?") for tc in tool_calls)
                 parts.append(f"[助手调用工具: {names}]")
                 continue
@@ -98,6 +129,29 @@ def _format_history(messages: list[BaseMessage]) -> str:
     return "\n".join(parts)
 
 
+async def _run_llm_extraction(
+    llm_caller: LLMCaller,
+    transcript: str,
+) -> SessionExtraction | None:
+    prompt: list[BaseMessage] = [
+        SystemMessage(content=_SUMMARIZE_SYSTEM_PROMPT),
+        HumanMessage(content=f"对话记录：\n\n{transcript}"),
+    ]
+    try:
+        result = await llm_caller.chat("summary", prompt, structured=SessionExtraction)
+    except Exception as exc:
+        _log.error("cron.consolidate.llm_failed", error=type(exc).__name__)
+        return None
+    try:
+        payload = (
+            json.loads(result.message.content) if isinstance(result.message.content, str) else {}
+        )
+        return SessionExtraction.model_validate(payload)
+    except Exception as exc:
+        _log.error("cron.consolidate.parse_failed", error=type(exc).__name__)
+        return None
+
+
 async def consolidate_session(
     ctx: dict[str, Any],
     *,
@@ -105,20 +159,28 @@ async def consolidate_session(
     channel: str | None = None,
     channel_user_id: str | None = None,
 ) -> str | None:
-    """Read the session's messages, summarize via LLM, persist to PG.
+    """Run the dual-write consolidation.
 
-    Returns the inserted row's ``id`` (str) on success, or ``None`` if the
-    session has no checkpoint (already consolidated or never existed).
-    Idempotent on missing data; tolerant of summarization failures (logs
-    and returns None rather than raising, so a stuck task doesn't kill
-    the worker).
+    1. Read the thread's messages from the Redis checkpointer.
+    2. Run one LLM call producing :class:`SessionExtraction`.
+    3. Write the medium-term half to ``agent.session_memory`` with a
+       30-day ``expires_at``.
+    4. Write the short-term half to Redis via
+       :func:`write_session_memory`.
+    5. Mark the session row ``status = 'consolidated'``.
+
+    Returns the inserted ``agent.session_memory.id`` on success or
+    ``None`` if there's nothing to consolidate. Tolerant of LLM / parse
+    failures (logs + returns None).
     """
     pool: asyncpg.Pool = ctx["pool"]
     redis: redis_async.Redis = ctx["redis"]
     llm_caller: LLMCaller = ctx["llm_caller"]
+    ttl_seconds: int = ctx.get("ttl_seconds", 1800)
+    event_ttl_days: int = ctx.get("event_ttl_days", DEFAULT_EVENT_TTL_DAYS)
 
     with bind_request(session_id=session_id, channel=channel, channel_user_id=channel_user_id):
-        ckpt = RedisCheckpointer(redis, ttl_seconds=ctx.get("ttl_seconds", 1800))
+        ckpt = RedisCheckpointer(redis, ttl_seconds=ttl_seconds)
         snap = await ckpt.aget_tuple({"configurable": {"thread_id": session_id}})
         if snap is None:
             _log.info("cron.consolidate.no_checkpoint")
@@ -134,44 +196,27 @@ async def consolidate_session(
             _log.info("cron.consolidate.empty_transcript")
             return None
 
-        prompt: list[BaseMessage] = [
-            SystemMessage(content=_SUMMARIZE_SYSTEM_PROMPT),
-            HumanMessage(content=f"对话记录：\n\n{transcript}"),
-        ]
-        try:
-            result = await llm_caller.chat("summary", prompt, structured=SessionSummary)
-        except Exception as exc:
-            _log.error("cron.consolidate.llm_failed", error=type(exc).__name__)
-            return None
-
-        # Structured output round-trip: LLMCaller wraps the parsed model
-        # as an AIMessage whose .content is its JSON; rehydrate.
-        try:
-            payload = (
-                json.loads(result.message.content)
-                if isinstance(result.message.content, str)
-                else {}
-            )
-            summary = SessionSummary.model_validate(payload)
-        except Exception as exc:
-            _log.error("cron.consolidate.parse_failed", error=type(exc).__name__)
+        extraction = await _run_llm_extraction(llm_caller, transcript)
+        if extraction is None:
             return None
 
         token_count = len(transcript)
         async with pool.acquire() as conn:
             row_id = await conn.fetchval(
                 "INSERT INTO agent.session_memory "
-                "(session_id, summary, token_count, metadata) "
-                "VALUES ($1, $2, $3, $4) RETURNING id",
+                "(session_id, summary, token_count, metadata, expires_at) "
+                "VALUES ($1, $2, $3, $4, now() + ($5 || ' days')::interval) "
+                "RETURNING id",
                 session_id,
-                summary.narrative,
+                extraction.narrative,
                 token_count,
                 {
-                    "intents": summary.intents,
-                    "key_facts": summary.key_facts,
-                    "sentiment": summary.sentiment,
-                    "unresolved": summary.unresolved,
+                    "intents": extraction.intents,
+                    "key_facts": extraction.key_facts,
+                    "sentiment": extraction.sentiment,
+                    "unresolved": extraction.unresolved,
                 },
+                str(event_ttl_days),
             )
             await conn.execute(
                 "UPDATE agent.session SET status = 'consolidated', "
@@ -179,10 +224,21 @@ async def consolidate_session(
                 session_id,
             )
 
+        await write_session_memory(
+            redis,
+            session_id=session_id,
+            preferences=extraction.preferences,
+            observations=extraction.observations,
+            ttl_seconds=ttl_seconds,
+        )
+
         _log.info(
             "cron.consolidate.persisted",
             row_id=str(row_id),
-            intents=len(summary.intents),
-            key_facts=len(summary.key_facts),
+            intents=len(extraction.intents),
+            key_facts=len(extraction.key_facts),
+            preferences=len(extraction.preferences),
+            observations=len(extraction.observations),
+            event_ttl_days=event_ttl_days,
         )
         return str(row_id)

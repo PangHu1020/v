@@ -70,11 +70,37 @@ class RedisSettings(BaseSettings):
 
 
 class MemorySettings(BaseSettings):
-    """Memory layer parameters."""
+    """Memory layer parameters (Phase-3 三层温度梯度).
+
+    The three layers and their levers:
+
+    - **会话记忆**（短期，本会话内）—— Redis hash; TTL = working_ttl_seconds.
+      Holds ``preferences`` + ``observations`` extracted from this
+      session's messages; written by mid-session compression and the
+      session-expiry trigger; consumed by the session-end promotion to
+      user_profile.
+    - **事件记忆**（中期，event_ttl_days 内）—— Postgres ``agent.session_memory``
+      rows with ``expires_at = now() + event_ttl_days * day``; the most
+      recent ``recent_events_to_inject`` rows are auto-injected at
+      ``on_session_start``.
+    - **用户记忆**（长期，永不过期）—— Postgres ``agent.user_profile``;
+      injected in full at ``on_session_start``.
+
+    ``compression_threshold_tokens`` triggers the mid-session
+    compression node: when ``messages`` total tokens exceed it, the
+    older messages are replaced with the just-written event-memory
+    summary so the prompt stays bounded.
+    """
 
     model_config = SettingsConfigDict(**_COMMON, env_prefix="MEMORY_")
 
-    working_ttl_seconds: int = 1800
+    working_ttl_seconds: int = Field(default=1800, ge=60)
+    event_ttl_days: int = Field(default=30, ge=1)
+    recent_events_to_inject: int = Field(default=3, ge=0, le=20)
+    compression_threshold_tokens: int = Field(default=4000, ge=500)
+    compression_keep_recent_messages: int = Field(default=4, ge=1)
+    """When compression fires, how many trailing messages to keep verbatim
+    (so the agent still has the immediate exchange in full fidelity)."""
 
 
 class BusSettings(BaseSettings):

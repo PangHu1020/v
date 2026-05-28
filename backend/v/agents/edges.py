@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage
 from backend.v.agents.state import CustomerServiceState
 
 ENTER = "enter"
+COMPRESS = "compress"
 AGENT = "agent"
 TOOLS = "tools"
 EXIT = "exit"

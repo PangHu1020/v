@@ -37,6 +37,7 @@ from backend.v.agents.checkpoints.postgres import open_pg_checkpointer
 from backend.v.agents.checkpoints.redis import RedisCheckpointer
 from backend.v.agents.graph import build_graph
 from backend.v.configs import get_settings
+from backend.v.cron.tasks.consolidate_session import consolidate_session
 from backend.v.hooks.handoff import append_operator_log, on_resume
 from backend.v.mcp import MCPRegistry, MCPToolCache, parse_servers
 from backend.v.models.factory import get_embedding
@@ -174,6 +175,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
         )
 
+    consolidate_ctx = {
+        "pool": pg_pool,
+        "redis": redis,
+        "llm_caller": llm_caller,
+        "ttl_seconds": settings.memory.working_ttl_seconds,
+        "event_ttl_days": settings.memory.event_ttl_days,
+    }
+
     handler = make_bus_handler(
         graph=graph,
         pool=pg_pool,
@@ -188,6 +197,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         embedder=embedder,
         skill_registry=skill_registry,
         skill_top_k=settings.skill.max_skills_per_turn,
+        recent_events_to_inject=settings.memory.recent_events_to_inject,
+        compression_threshold_tokens=settings.memory.compression_threshold_tokens,
+        compression_keep_recent_messages=settings.memory.compression_keep_recent_messages,
+        token_model=settings.llm.main_primary,
+        consolidate_callable=consolidate_session,
+        consolidate_ctx=consolidate_ctx,
     )
 
     consumer = BusConsumer(

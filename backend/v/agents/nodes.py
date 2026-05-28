@@ -1,4 +1,4 @@
-"""LangGraph nodes: enter -> agent (with tools) -> exit.
+"""LangGraph nodes: enter -> compress -> agent (with tools) -> exit.
 
 Phase-2 P0 binds the ``transfer_to_human`` tool so the agent can suspend
 the graph via :func:`langgraph.types.interrupt` when handoff is needed.
@@ -8,6 +8,10 @@ tool calls through ``ToolNode`` and back; tool-less responses go to exit.
 Phase-2 P4: ``enter_node`` consults the optional skill registry passed
 through ``config['configurable']['skill_registry']`` and inlines any
 matching SOPs into the system prompt.
+
+Phase-3 Group C: ``enter_node`` also renders ``state['recent_events']``
+(the last few medium-term ``agent.session_memory`` rows for this
+identity) so the agent has cross-session continuity.
 """
 
 from __future__ import annotations
@@ -18,6 +22,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 from backend.v.agents.state import CustomerServiceState
+from backend.v.memory.event_memory import render_recent_events_for_prompt
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.skills import SkillRegistry
 from backend.v.tools import recall_memory, subagent, transfer_to_human
@@ -33,7 +38,7 @@ Phase-2 P3 added ``recall_memory`` and ``subagent``."""
 def _system_prompt(profile: dict[str, Any] | None, channel: str) -> str:
     """Render the base per-turn system prompt without skill injection."""
     base = (
-        "你是一名外部客户服务助理，正在通过 "
+        "你是一名外部���户服务助理，正在通过 "
         f"{channel} 与客户对话。回复要简短、礼貌、准确；"
         "若涉及订单、物流、退货等具体业务，按 SOP 给出明确步骤。"
         "若问题超出你的能力或客户明确要求人工，请说明会转接人工。"
@@ -79,28 +84,41 @@ async def enter_node(
     state: CustomerServiceState,
     config: RunnableConfig,
 ) -> dict[str, Any]:
-    """Prepend a system prompt with the user_profile on the first turn.
+    """Prepend a system prompt with profile / events / skills on first turn.
 
     On subsequent turns within the same thread (the checkpointer's
-    ``thread_id``) the messages already include a leading SystemMessage and
-    we leave them untouched.
+    ``thread_id``) the messages already include a leading SystemMessage
+    and we leave them untouched.
 
-    Phase-2 P4: when a ``skill_registry`` is provided via configurable,
-    matching SOPs are appended to the system prompt below the user
-    profile.
+    Sections rendered (in order):
+
+    1. Base persona + channel context
+    2. Long-term ``user_profile`` snippets
+    3. Recent medium-term events (cross-session continuity)
+    4. Matched skills / SOPs (if a registry is present and the latest
+       human message hits intent keywords)
     """
     messages = state.get("messages", [])
     if any(isinstance(m, SystemMessage) for m in messages):
         return {}
     cfg = config.get("configurable", {}) if config else {}
-    base_prompt = _system_prompt(state.get("user_profile"), state.get("channel", ""))
+
+    sections: list[str] = [_system_prompt(state.get("user_profile"), state.get("channel", ""))]
+
+    events_block = render_recent_events_for_prompt(state.get("recent_events") or [])
+    if events_block:
+        sections.append(events_block)
+
     skill_section = _maybe_skill_section(
         cfg.get("skill_registry"),
         query=_latest_human_text(messages),
         channel=state.get("channel", ""),
         top_k=int(cfg.get("skill_top_k", 3)),
     )
-    full_prompt = f"{base_prompt}\n\n{skill_section}" if skill_section else base_prompt
+    if skill_section:
+        sections.append(skill_section)
+
+    full_prompt = "\n\n".join(sections)
     return {"messages": [SystemMessage(content=full_prompt)]}
 
 

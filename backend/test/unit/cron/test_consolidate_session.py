@@ -1,6 +1,6 @@
 """Unit tests for ``backend.v.cron.tasks.consolidate_session``.
 
-Stubs the LLMCaller (returns a canned ``SessionSummary`` JSON) and the
+Stubs the LLMCaller (returns a canned ``SessionExtraction`` JSON) and the
 PG pool. Uses a real ``RedisCheckpointer`` over fakeredis seeded with a
 short conversation to exercise the message extraction + transcript
 formatting path.
@@ -21,7 +21,7 @@ from langchain_core.runnables import RunnableConfig
 
 from backend.v.agents.checkpoints.redis import RedisCheckpointer
 from backend.v.cron.tasks.consolidate_session import (
-    SessionSummary,
+    SessionExtraction,
     _format_history,
     consolidate_session,
 )
@@ -148,7 +148,7 @@ class TestConsolidateSession:
         )
 
         # Mock LLM to return a structured summary.
-        canned = SessionSummary(
+        canned = SessionExtraction(
             narrative="客户咨询订单 ORD123 的物流状态，助手已开始查询。",
             intents=["物流查询"],
             key_facts=["订单号: ORD123"],
@@ -185,7 +185,7 @@ class TestConsolidateSession:
         passed_msgs = llm_caller.chat.call_args.args[1]
         human = next(m for m in passed_msgs if isinstance(m, HumanMessage))
         assert "ORD123" in human.content
-        assert kwargs["structured"] is SessionSummary
+        assert kwargs["structured"] is SessionExtraction
 
     async def test_llm_failure_returns_none(
         self,
@@ -264,21 +264,21 @@ class TestConsolidateSession:
         assert log == []
 
 
-class TestSessionSummarySchema:
+class TestSessionExtractionSchema:
     def test_default_field_values(self) -> None:
-        s = SessionSummary(narrative="x")
+        s = SessionExtraction(narrative="x")
         assert s.intents == []
         assert s.key_facts == []
         assert s.sentiment == "neutral"
         assert s.unresolved == []
 
     def test_round_trip_json(self) -> None:
-        s = SessionSummary(
+        s = SessionExtraction(
             narrative="客户咨询订单",
             intents=["物流查询"],
             key_facts=["ORD123"],
             sentiment="positive",
             unresolved=[],
         )
-        rehydrated = SessionSummary.model_validate(json.loads(s.model_dump_json()))
+        rehydrated = SessionExtraction.model_validate(json.loads(s.model_dump_json()))
         assert rehydrated == s

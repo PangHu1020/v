@@ -147,6 +147,12 @@ def make_bus_handler(
     embedder: Any | None = None,
     skill_registry: Any | None = None,
     skill_top_k: int = 3,
+    recent_events_to_inject: int = 0,
+    compression_threshold_tokens: int = 0,
+    compression_keep_recent_messages: int = 4,
+    token_model: str | None = None,
+    consolidate_callable: Any | None = None,
+    consolidate_ctx: dict[str, Any] | None = None,
 ) -> Callable[[SystemMessage], Awaitable[None]]:
     """Build a bus consumer handler bound to the runtime dependencies.
 
@@ -165,6 +171,21 @@ def make_bus_handler(
             loaded skills and inline matching SOPs into the system
             prompt. ``None`` disables skill injection.
         skill_top_k: Cap on injected skills per turn.
+        recent_events_to_inject: Phase-3 Group C. Number of medium-term
+            event-memory rows to load at session start; ``0`` disables.
+        compression_threshold_tokens: Phase-3 Group C. Mid-session
+            compression fires when the prompt exceeds this many tokens;
+            ``0`` disables compression entirely.
+        compression_keep_recent_messages: Trailing messages to keep
+            verbatim when compression fires.
+        token_model: Optional model name for the tokenizer; defaults to
+            ``cl100k_base`` via :mod:`backend.v.utils.tokens`.
+        consolidate_callable: Phase-3 Group C. The async function the
+            compression node calls when it needs to write 会话记忆 +
+            事件记忆 (typically ``consolidate_session``).
+        consolidate_ctx: ARQ-style context dict passed to
+            ``consolidate_callable`` (must contain ``pool``, ``redis``,
+            ``llm_caller``, ``ttl_seconds``, ``event_ttl_days``).
     """
 
     handoff_enabled = slack_outbound is not None and redis_ckpt is not None and pg_ckpt is not None
@@ -209,13 +230,16 @@ def make_bus_handler(
                     return
 
                 # 2) Normal path.
-                profile = await on_session_start(
+                bootstrap = await on_session_start(
                     pool=pool,
                     redis=redis,
                     channel=msg.channel,
                     channel_user_id=msg.channel_user_id,
                     cache_ttl_seconds=cache_ttl_seconds,
+                    recent_events_limit=recent_events_to_inject,
                 )
+                profile = bootstrap["profile"]
+                recent_events = bootstrap["recent_events"]
 
                 input_state: CustomerServiceState = {
                     "messages": [HumanMessage(content=msg.text)],
@@ -223,6 +247,7 @@ def make_bus_handler(
                     "channel": msg.channel,
                     "channel_user_id": msg.channel_user_id,
                     "user_profile": profile,
+                    "recent_events": recent_events,
                     "interrupt_payload": None,
                 }
                 config = {
@@ -241,6 +266,14 @@ def make_bus_handler(
                         # match SOPs against the customer's message.
                         "skill_registry": skill_registry,
                         "skill_top_k": skill_top_k,
+                        # Phase-3 Group C: compression_node levers + sync
+                        # consolidation callable / ctx so it can compress
+                        # mid-session without leaving the graph.
+                        "compression_threshold_tokens": compression_threshold_tokens,
+                        "compression_keep_recent_messages": compression_keep_recent_messages,
+                        "token_model": token_model,
+                        "consolidate_callable": consolidate_callable,
+                        "consolidate_ctx": consolidate_ctx,
                     }
                 }
 

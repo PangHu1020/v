@@ -20,14 +20,16 @@ class CustomerServiceState(TypedDict, total=False):
     Attributes:
         messages: Conversation history; ``add_messages`` reducer appends new
             ``BaseMessage`` instances. Includes a system prompt prepended by
-            ``on_session_start`` plus the user's turn(s) and the AI replies.
+            ``enter_node`` plus the user's turn(s) and the AI replies.
         session_id: Mint-on-30-min-silence identifier for the conversation.
-        channel: Channel slug (``wecom`` / ``feishu``).
+        channel: Channel slug (``wecom`` / ``feishu`` / ``wecom_aibot``).
         channel_user_id: External per-channel user id.
         user_profile: Long-term ``user_profile`` row injected at session start.
             ``None`` when the user has no stored profile yet.
-        interrupt_payload: Reserved for Phase-2 ``transfer_to_human`` handoff
-            metadata. Phase-1 nodes leave it untouched.
+        recent_events: List of medium-term event-memory dicts loaded at
+            session start (newest first; rendered into the system prompt
+            by ``enter_node`` for cross-session continuity).
+        interrupt_payload: Reserved for ``transfer_to_human`` handoff metadata.
     """
 
     messages: Annotated[list[BaseMessage], add_messages]
@@ -35,4 +37,5 @@ class CustomerServiceState(TypedDict, total=False):
     channel: str
     channel_user_id: str
     user_profile: dict[str, Any] | None
+    recent_events: list[dict[str, Any]]
     interrupt_payload: dict[str, Any] | None

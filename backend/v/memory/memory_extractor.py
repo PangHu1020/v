@@ -1,26 +1,29 @@
-"""Long-term memory writer (Phase-2 P3).
+"""Long-term memory promotion (Phase-3 三层温度梯度第三层入口).
 
-Reads the most recent ``agent.session_memory`` row for a session and uses
-DeepSeek flash with structured Pydantic output to:
+固化（Consolidation step）: at session end, read the short-term
+``会话记忆`` (Redis) and ask DeepSeek flash with structured Pydantic
+output to:
 
-1. Produce an updated ``user_profile`` JSONB by intelligently merging the
-   session's findings with the existing stored profile (the LLM gets both
-   as input so it can decide what to keep, replace, or add).
-2. Extract a list of standalone episodic memories (Chinese sentences
-   like "客户对发货速度敏感，曾投诉延误"), embed them via Qwen
-   ``text-embedding-v4`` (1024-dim Matryoshka), and INSERT into
-   ``agent.memory_episodes`` so :func:`backend.v.tools.recall_memory`
-   can semantically retrieve them on future turns.
+1. Update ``agent.user_profile`` JSONB with whatever **long-term-useful**
+   subset of this session's preferences should cross over (the LLM sees
+   the existing profile + the session preferences and decides which keys
+   are tendency-bound vs session-bound).
+2. Extract a list of standalone episodic facts about the customer
+   (Chinese sentences like "客户偏好顺丰快递", "曾投诉物流延误"),
+   embed them via Qwen ``text-embedding-v4`` (1024-dim Matryoshka), and
+   INSERT into ``agent.memory_episodes`` so
+   :func:`backend.v.tools.recall_memory` can semantically retrieve them.
 
-Triggered as an ARQ delayed job right after
-:func:`backend.v.cron.tasks.consolidate_session.consolidate_session`
-finishes; runs in the background so neither the agent's reactive turn
-nor the consolidation itself wait on this slower work.
+Phase-3 trigger change: this no longer fires after every
+``consolidate_session``. Only the session-end pathway calls it, because:
+
+- Mid-session compression should not pollute long-term memory with
+  preferences that may yet be contradicted in the same session.
+- Promoting on every compression doubles LLM cost for marginal benefit.
 
 Idempotent on partial failures: profile upsert is its own transaction,
 episode inserts are independent rows. A retry sees the existing profile
-and merges the same way; episodes may end up with mild duplicates which
-the recency-weighted recall surfaces only the newest of.
+and merges the same way.
 """
 
 from __future__ import annotations
@@ -33,6 +36,10 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
+from backend.v.memory.session_memory import (
+    delete_session_memory,
+    read_session_memory,
+)
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.utils.logging import bind_request, get_logger
 
@@ -59,8 +66,8 @@ class Episode(BaseModel):
 
 
 class ExtractionOutput(BaseModel):
-    """LLM-produced merge of (existing profile, session findings) into both
-    a refreshed profile and a list of episodes."""
+    """LLM-produced merge of (existing profile, session preferences) into
+    both a refreshed long-term profile and a list of episodes."""
 
     profile: dict[str, Any] = Field(
         default_factory=dict,
@@ -76,56 +83,36 @@ class ExtractionOutput(BaseModel):
     )
 
 
-_EXTRACT_SYSTEM_PROMPT = (
+_PROMOTION_SYSTEM_PROMPT = (
     "你是一名长期记忆抽取助手。"
-    "输入：客户的现有画像（user_profile）+ 一次会话的总结（含 narrative / intents / "
-    "key_facts / sentiment / unresolved）。"
-    "输出：① 更新后的 user_profile（保留旧字段，仅在新信息明确支持时增改）；"
-    "② episodes 列表（每条是一句独立的中文事实，例如「客户偏好夜间收货」「投诉过物流延误」）。"
-    "若没有可加入长期记忆的信息，episodes 留空。"
-    "不要编造信息，宁可少而准。"
+    "输入：客户的现有长期画像（user_profile）+ 本次会话的短期记忆（preferences / observations）。"
+    "输出：① 更新后的长期画像，**只**纳入跨会话仍然成立的属性 / 偏好"
+    "（比如「偏好顺丰」「常用普通话」），不要纳入本次会话才出现的临时状态"
+    "（比如「今天心情不好」「今晚要发货」）；保留原有字段，仅在新信息明确支持时增改。"
+    "② episodes 列表（每条是一句独立的中文事实，例如「客户偏好夜间收货」"
+    "「投诉过物流延误」），用于后续语义召回。"
+    "若没有可加入长期记忆的信息，对应字段留空，不要编造。"
 )
 
 
 def _build_prompt(
     existing_profile: dict[str, Any],
-    session_narrative: str,
-    session_meta: dict[str, Any],
+    session_memory: dict[str, Any],
 ) -> list[BaseMessage]:
+    prefs_json = json.dumps(session_memory.get("preferences", {}), ensure_ascii=False)
+    obs_json = json.dumps(session_memory.get("observations", []), ensure_ascii=False)
     return [
-        SystemMessage(content=_EXTRACT_SYSTEM_PROMPT),
+        SystemMessage(content=_PROMOTION_SYSTEM_PROMPT),
         HumanMessage(
             content=(
-                "现有画像（JSON）：\n"
+                "现有长期画像（JSON）：\n"
                 f"```json\n{json.dumps(existing_profile, ensure_ascii=False, indent=2)}\n```\n\n"
-                "本次会话总结：\n"
-                f"narrative: {session_narrative}\n"
-                f"intents: {session_meta.get('intents', [])}\n"
-                f"key_facts: {session_meta.get('key_facts', [])}\n"
-                f"sentiment: {session_meta.get('sentiment', 'neutral')}\n"
-                f"unresolved: {session_meta.get('unresolved', [])}\n"
+                "本次会话短期记忆：\n"
+                f"preferences: {prefs_json}\n"
+                f"observations: {obs_json}\n"
             )
         ),
     ]
-
-
-async def _read_session_memory(
-    pool: asyncpg.Pool,
-    session_id: str,
-) -> tuple[str, dict[str, Any]] | None:
-    """Return ``(summary, metadata)`` of the latest session_memory row, or ``None``."""
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT summary, metadata FROM agent.session_memory "
-            "WHERE session_id = $1 ORDER BY created_at DESC LIMIT 1",
-            session_id,
-        )
-    if row is None:
-        return None
-    metadata = row["metadata"] or {}
-    if isinstance(metadata, str):
-        metadata = json.loads(metadata)
-    return row["summary"], dict(metadata)
 
 
 async def _read_session_identity(
@@ -217,13 +204,20 @@ async def extract_session_memory(
     *,
     session_id: str,
 ) -> dict[str, int] | None:
-    """Pull the latest session_memory row and promote it into long-term storage.
+    """Promote this session's short-term 会话记忆 to long-term storage.
+
+    Reads the Redis session_memory record (preferences + observations),
+    asks the LLM to filter for long-term-useful items, and writes the
+    surviving items into ``agent.user_profile`` (structured) and
+    ``agent.memory_episodes`` (vectorized). On success, drops the Redis
+    record so a subsequent re-run is a clean no-op.
 
     Returns ``{"profile_updated": 0|1, "episodes_inserted": N}`` on
-    success, or ``None`` if there's nothing to extract (no session_memory,
-    no session row, or the LLM failed).
+    success, ``None`` if there's nothing to promote (no session row, no
+    short-term record, or LLM/parse failure).
     """
     pool: asyncpg.Pool = ctx["pool"]
+    redis = ctx["redis"]
     llm_caller: LLMCaller = ctx["llm_caller"]
     embedder: Embeddings = ctx["embedder"]
 
@@ -234,17 +228,16 @@ async def extract_session_memory(
             return None
         channel, channel_user_id = identity
 
-        sm = await _read_session_memory(pool, session_id)
+        sm = await read_session_memory(redis, session_id=session_id)
         if sm is None:
             _log.info("memory.extractor.no_session_memory")
             return None
-        summary, meta = sm
 
         existing = await _read_existing_profile(
             pool, channel=channel, channel_user_id=channel_user_id
         )
 
-        prompt = _build_prompt(existing, summary, meta)
+        prompt = _build_prompt(existing, sm)
         try:
             result = await llm_caller.chat("memory_extract", prompt, structured=ExtractionOutput)
         except Exception as exc:
@@ -262,8 +255,6 @@ async def extract_session_memory(
             _log.error("memory.extractor.parse_failed", error=type(exc).__name__)
             return None
 
-        # Merge: LLM returns the FULL desired profile (it sees the existing
-        # one). If empty, leave the stored profile alone.
         profile_updated = 0
         if extracted.profile and extracted.profile != existing:
             await _upsert_user_profile(
@@ -281,6 +272,10 @@ async def extract_session_memory(
             episodes=extracted.episodes,
             embedder=embedder,
         )
+
+        # On a successful promotion, drop the Redis short-term record so a
+        # later cron run re-firing on the same session is a clean no-op.
+        await delete_session_memory(redis, session_id=session_id)
 
         _log.info(
             "memory.extractor.done",

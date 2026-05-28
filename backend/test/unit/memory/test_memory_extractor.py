@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 
 import asyncpg
+import fakeredis.aioredis
 import pytest
 from langchain_core.messages import AIMessage
 
@@ -15,16 +17,22 @@ from backend.v.memory.memory_extractor import (
     ExtractionOutput,
     extract_session_memory,
 )
+from backend.v.memory.session_memory import write_session_memory
 from backend.v.models.llm_caller import LLMResult
+
+
+@pytest.fixture
+async def redis_client() -> AsyncIterator[fakeredis.aioredis.FakeRedis]:
+    client = fakeredis.aioredis.FakeRedis(decode_responses=False)
+    yield client
+    await client.aclose()
 
 
 def _fake_pool(
     *,
     session_row: dict | None = None,
-    session_memory_row: dict | None = None,
     profile_row: dict | None = None,
 ) -> tuple[MagicMock, list[tuple[str, tuple]]]:
-    """Pool that records SQL and returns canned rows by SQL keyword."""
     pool = MagicMock(spec=asyncpg.Pool)
     log: list[tuple[str, tuple]] = []
 
@@ -32,8 +40,6 @@ def _fake_pool(
         log.append((sql, args))
         if "FROM agent.session WHERE" in sql:
             return session_row
-        if "FROM agent.session_memory" in sql:
-            return session_memory_row
         if "FROM agent.user_profile" in sql:
             return profile_row
         return None
@@ -75,55 +81,62 @@ def _embedder_returning(vectors: list[list[float]]) -> MagicMock:
 
 
 class TestExtractSessionMemory:
-    async def test_no_session_row_returns_none(self) -> None:
+    async def test_no_session_row_returns_none(
+        self, redis_client: fakeredis.aioredis.FakeRedis
+    ) -> None:
         pool, log = _fake_pool(session_row=None)
-        ctx = {"pool": pool, "llm_caller": MagicMock(), "embedder": MagicMock()}
+        ctx = {
+            "pool": pool,
+            "redis": redis_client,
+            "llm_caller": MagicMock(),
+            "embedder": MagicMock(),
+        }
         result = await extract_session_memory(ctx, session_id="ghost")
         assert result is None
-        # Only the lookup ran; no LLM, no embed.
-        assert len(log) == 1
+        assert len(log) == 1  # only the session identity lookup
 
-    async def test_no_session_memory_returns_none(self) -> None:
+    async def test_no_session_memory_returns_none(
+        self, redis_client: fakeredis.aioredis.FakeRedis
+    ) -> None:
         pool, _ = _fake_pool(
             session_row={"channel": "wecom", "channel_user_id": "u"},
-            session_memory_row=None,
         )
-        ctx = {"pool": pool, "llm_caller": MagicMock(), "embedder": MagicMock()}
+        # No session_memory written to Redis → None
+        ctx = {
+            "pool": pool,
+            "redis": redis_client,
+            "llm_caller": MagicMock(),
+            "embedder": MagicMock(),
+        }
         result = await extract_session_memory(ctx, session_id="s")
         assert result is None
 
-    async def test_full_round_trip_writes_profile_and_episodes(self) -> None:
+    async def test_full_round_trip_writes_profile_and_episodes(
+        self, redis_client: fakeredis.aioredis.FakeRedis
+    ) -> None:
         pool, log = _fake_pool(
             session_row={"channel": "wecom", "channel_user_id": "ext-1"},
-            session_memory_row={
-                "summary": "客户咨询订单 ORD123 物流。",
-                "metadata": {
-                    "intents": ["物流查询"],
-                    "key_facts": ["ORD123"],
-                    "sentiment": "neutral",
-                    "unresolved": [],
-                },
-            },
             profile_row={"profile": {"member_level": "黄金"}},
+        )
+        # Seed Redis session_memory
+        await write_session_memory(
+            redis_client,
+            session_id="s",
+            preferences={"preferred_courier": "顺丰"},
+            observations=["客户对物流速度敏感"],
+            ttl_seconds=1800,
         )
         extracted = ExtractionOutput(
             profile={"member_level": "黄金", "preferred_courier": "顺丰"},
             episodes=[
-                Episode(
-                    content="客户偏好顺丰快递",
-                    importance=4,
-                    tags=["preference"],
-                ),
-                Episode(
-                    content="客户对物流速度敏感",
-                    importance=3,
-                    tags=["sensitivity"],
-                ),
+                Episode(content="客户偏好顺丰快递", importance=4, tags=["preference"]),
+                Episode(content="客户对物流速度敏感", importance=3, tags=["sensitivity"]),
             ],
         )
         embedder = _embedder_returning([[0.1] * 1024, [0.2] * 1024])
         ctx = {
             "pool": pool,
+            "redis": redis_client,
             "llm_caller": _llm_returning(extracted),
             "embedder": embedder,
         }
@@ -132,46 +145,74 @@ class TestExtractSessionMemory:
 
         sqls = [s for s, _ in log]
         assert any("INSERT INTO agent.user_profile" in s for s in sqls)
-        # Two episodes -> two INSERTs.
         assert sum("INSERT INTO agent.memory_episodes" in s for s in sqls) == 2
 
-    async def test_empty_profile_skips_upsert(self) -> None:
+        # Redis record deleted after successful promotion.
+        assert await redis_client.get("session_memory:s") is None
+
+    async def test_empty_profile_skips_upsert(
+        self, redis_client: fakeredis.aioredis.FakeRedis
+    ) -> None:
         pool, log = _fake_pool(
             session_row={"channel": "wecom", "channel_user_id": "u"},
-            session_memory_row={"summary": "x", "metadata": {}},
             profile_row={"profile": {"member_level": "黄金"}},
         )
-        # LLM returns empty profile (nothing changed) and no episodes.
+        await write_session_memory(
+            redis_client,
+            session_id="s",
+            preferences={},
+            observations=["x"],
+            ttl_seconds=1800,
+        )
         extracted = ExtractionOutput(profile={}, episodes=[])
         ctx = {
             "pool": pool,
+            "redis": redis_client,
             "llm_caller": _llm_returning(extracted),
             "embedder": MagicMock(),
         }
         result = await extract_session_memory(ctx, session_id="s")
         assert result == {"profile_updated": 0, "episodes_inserted": 0}
         sqls = [s for s, _ in log]
-        # No INSERT/UPDATE on user_profile or memory_episodes.
         assert not any("INSERT INTO agent.user_profile" in s for s in sqls)
         assert not any("INSERT INTO agent.memory_episodes" in s for s in sqls)
 
-    async def test_llm_failure_returns_none(self) -> None:
+    async def test_llm_failure_returns_none(
+        self, redis_client: fakeredis.aioredis.FakeRedis
+    ) -> None:
         pool, _ = _fake_pool(
             session_row={"channel": "wecom", "channel_user_id": "u"},
-            session_memory_row={"summary": "x", "metadata": {}},
-            profile_row=None,
+        )
+        await write_session_memory(
+            redis_client,
+            session_id="s",
+            preferences={"x": "y"},
+            observations=[],
+            ttl_seconds=1800,
         )
         caller = MagicMock()
         caller.chat = AsyncMock(side_effect=RuntimeError("api down"))
-        ctx = {"pool": pool, "llm_caller": caller, "embedder": MagicMock()}
+        ctx = {
+            "pool": pool,
+            "redis": redis_client,
+            "llm_caller": caller,
+            "embedder": MagicMock(),
+        }
         result = await extract_session_memory(ctx, session_id="s")
         assert result is None
 
-    async def test_corrupt_llm_output_returns_none(self) -> None:
+    async def test_corrupt_llm_output_returns_none(
+        self, redis_client: fakeredis.aioredis.FakeRedis
+    ) -> None:
         pool, _ = _fake_pool(
             session_row={"channel": "wecom", "channel_user_id": "u"},
-            session_memory_row={"summary": "x", "metadata": {}},
-            profile_row=None,
+        )
+        await write_session_memory(
+            redis_client,
+            session_id="s",
+            preferences={"x": "y"},
+            observations=[],
+            ttl_seconds=1800,
         )
         caller = MagicMock()
         caller.chat = AsyncMock(
@@ -183,14 +224,18 @@ class TestExtractSessionMemory:
                 latency_ms=1,
             )
         )
-        ctx = {"pool": pool, "llm_caller": caller, "embedder": MagicMock()}
+        ctx = {
+            "pool": pool,
+            "redis": redis_client,
+            "llm_caller": caller,
+            "embedder": MagicMock(),
+        }
         result = await extract_session_memory(ctx, session_id="s")
         assert result is None
 
 
 class TestEpisodeSchema:
     def test_validation_clamps_importance(self) -> None:
-        # Out of range raises.
         with pytest.raises(Exception):  # noqa: B017
             Episode(content="x", importance=10)
 
