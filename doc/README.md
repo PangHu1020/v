@@ -23,4 +23,10 @@ Phase-2 收官后的完整文档索引。
 - **Phase-2 P2**（ARQ 主动触达 + 会话总结）：已完成（`e60739b`）
 - **Phase-2 P3**（长期记忆抽取 + 召回）：已完成（`08cac81`）
 - **Phase-2 通用 subagent + Skill 加载器**：已完成（`f372192`、`c671fe7`）
-- **Phase-3**（可观测性 / 性能 / 多租户）：见 [gaps.md](gaps.md)
+- **Phase-3 Group B**（token counter + metadata-first fallback ladder）：已完成（`e3047eb`）
+- **Phase-3 Group C**（三层记忆 + 中段压缩）：已完成（`bd7457e`）
+- **Phase-3 Group D**（工具死循环检测 + 熔断）：已完成（`b528e9b`）
+- **Phase-3 Group D+E**（工具安全护栏 + intent/reflection 节点）：已完成（`3ce6d18`）
+- **Phase-3 Group F**（情绪预判 → 主动接管）：已完成（`c89542b`）
+- **Phase-3 Group G**（WeCom 智能机器人 WebSocket 适配器 + 独立 worker 进程）：已完成（`2a83de1`）
+- **Phase-3 余下**（可观测性 / 性能基准 / 多租户）：见 [gaps.md](gaps.md)

@@ -361,6 +361,30 @@ async def on_resume(session_id, ...):
 
 ---
 
+## 阶段 11（变体）：WeCom 智能机器人 WebSocket（Phase-3 G）
+
+智能机器人入站不走 HTTP webhook，而是常驻 WS。阶段 0–2 被替换为以下路径，阶段 3 起完全相同。
+
+### 11.1 启动
+
+[backend/app/wecom_aibot_worker.py](../backend/app/wecom_aibot_worker.py) 作为独立进程启动（`python -m backend.app.wecom_aibot_worker`），加载 `WECOM_AIBOT_WS_URL` 等配置；为空则立即退出（部署上跳过此渠道无成本）。
+
+### 11.2 WS 长连接 + 帧解码
+
+[backend/app/channels/wecom_aibot/client.py:WecomAibotClient.run](../backend/app/channels/wecom_aibot/client.py)
+
+- `websockets.connect(url)`，30s 心跳 ping，断线指数回退（1s→60s）重连
+- 每条入站 JSON 帧 → 提取 `from_user`、`text`、`msg_id` → 构造 `SystemMessage(channel="wecom_aibot", ...)`
+- `await debouncer.observe(sys_msg)` —— 与 HTTP 渠道共用同一个 debouncer + bus producer
+
+### 11.3 出站（Redis pub/sub 跨进程）
+
+阶段 8 的 `sends["wecom_aibot"]` 是 [WecomAibotOutbound.send_text](../backend/app/channels/wecom_aibot/outbound.py)：在 worker handler 进程内不能直接握 WS 句柄（句柄在 wecom_aibot_worker 进程里），所以 `send_text` 仅做 `redis.publish("wecom_aibot:outbound", json)`；wecom_aibot_worker 的 pub/sub task 收到后调 `WecomAibotClient.send_text(...)` 真正写 WS 帧。
+
+阶段 3–7、9 完全复用 HTTP 路径；阶段 6.5 的 interrupt / 阶段 10 的接管同样适用，操作员回复仍通过 `sends[channel]` 即上面这条 Redis 通道送回 WS。
+
+---
+
 ## 总结：函数调用栈深度
 
 最简单的一轮（无工具调用、无接管）大约 **17 个跨模块函数调用**。

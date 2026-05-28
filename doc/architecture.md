@@ -11,6 +11,12 @@
 - 长期记忆（session 总结 → user_profile + memory_episodes，向量召回 + 时间衰减）
 - 通用 subagent 工具（`context_mode` 参数控制共享 / 独立上下文）
 - Skill 加载器（markdown SOP，按客户意图匹配，自动注入 system prompt）
+- Phase-3 Group B：token 计数器 + metadata-first 降级阶梯
+- Phase-3 Group C：三层记忆架构 + 会话中段压缩
+- Phase-3 Group D：工具死循环检测 + 熔断（dead-loop guard + circuit breaker）
+- Phase-3 Group E：intent / reflection 节点 + 工具安全护栏
+- Phase-3 Group F：情绪预判 → 主动接管（emotion pre-emption to handoff）
+- Phase-3 Group G：WeCom 智能机器人（WebSocket）适配器 + 独立 worker 进程
 
 未实现：可观测性（Prometheus metrics）、性能基准、多租户。详见 [gaps.md](gaps.md)。
 
@@ -39,6 +45,7 @@ backend/
 ├── app/                                    外壳 & 网关
 │   ├── main.py                             FastAPI 入口 + lifespan
 │   ├── cron_worker.py                      ARQ WorkerSettings 入口（独立进程）
+│   ├── wecom_aibot_worker.py               WeCom 智能机器人 WS 独立 worker 入口（Phase-3 G）
 │   ├── gateway/
 │   │   ├── middleware.py                   RequestIdMiddleware
 │   │   └── routers/health.py               GET /health
@@ -53,8 +60,9 @@ backend/
 │   ├── channels/                           客户侧适配器
 │   │   ├── base.py                         ChannelAdapter ABC
 │   │   ├── debounce.py                     500ms 合并窗口
-│   │   ├── wecom/                          WeCom：signature/crypto/router/outbound
-│   │   └── feishu/                         Feishu：同上
+│   │   ├── wecom/                          WeCom：signature/crypto/router/outbound（HTTP webhook）
+│   │   ├── wecom_aibot/                    WeCom 智能机器人：WS client + Redis pub/sub outbound（Phase-3 G）
+│   │   └── feishu/                         Feishu：HTTP webhook
 │   └── operator/                           Phase-2 P0：人工接管
 │       └── slack/
 │           ├── signature.py                Slack v0 HMAC-SHA256
@@ -166,6 +174,7 @@ L1 进程内 dict + L2 Redis。键 = `mcp:cache:{server_id}:{tool_name}:{sha256(
 | `MemorySettings` | `MEMORY_` | P1 |
 | `BusSettings` | `BUS_` | P1 |
 | `WecomSettings` | `WECOM_` | P1 |
+| `WecomAibotSettings` | `WECOM_AIBOT_` | P3 G |
 | `FeishuSettings` | `FEISHU_` | P1 |
 | `SlackSettings` | `SLACK_` | P2 P0 |
 | `MCPSettings` | `MCP_` | P2 P1 |
@@ -175,6 +184,20 @@ L1 进程内 dict + L2 Redis。键 = `mcp:cache:{server_id}:{tool_name}:{sha256(
 ### 4.12 结构化日志 ([backend/v/utils/logging.py](../backend/v/utils/logging.py))
 
 `structlog` + dev / json 双模式。`bind_request(request_id, channel, channel_user_id, session_id, **extra)` 上下文管理器，进入块期间所有日志自动带这些字段。
+
+### 4.13 WeCom 智能机器人 WebSocket 适配器（Phase-3 G）
+
+[backend/app/channels/wecom_aibot/client.py](../backend/app/channels/wecom_aibot/client.py)
+[backend/app/channels/wecom_aibot/outbound.py](../backend/app/channels/wecom_aibot/outbound.py)
+[backend/app/wecom_aibot_worker.py](../backend/app/wecom_aibot_worker.py)
+
+与 WeCom HTTP webhook 不同，智能机器人协议要求客户端持有一条长连 WS。所以本渠道由独立 worker 进程承载：
+
+- `WecomAibotClient`：持久 WS（指数退避重连 1s→60s + 30s 心跳）。入站 frame 归一化为 `SystemMessage(channel="wecom_aibot")` 后送 `Debouncer`，与 HTTP 渠道共用同一条 bus。
+- `WecomAibotOutbound`：实现与其他渠道 outbound 相同的 `send_text(channel_user_id, text)` 接口，但底层是把 JSON 发布到 Redis pub/sub channel（默认 `wecom_aibot:outbound`）；FastAPI 主进程 / ARQ worker / Slack handoff 任何一处都能往这里发，由 worker 进程统一通过 WS 转发。
+- `wecom_aibot_worker.py`：进程入口。同时跑 `WecomAibotClient.run()` 和一个 pub/sub 订阅 task，用 SIGINT/SIGTERM 优雅关停。
+
+配置（`WECOM_AIBOT_*`）：`WS_URL` / `TOKEN` / `HEARTBEAT_SECONDS=30` / `OUTBOUND_PUBSUB_CHANNEL=wecom_aibot:outbound`。`WS_URL` 为空时 worker 启动后立即退出，便于在不启用该渠道的部署里直接跳过。
 
 ## 5. 数据库 schema
 
@@ -211,11 +234,11 @@ LangGraph 的 PG checkpointer 表由 `AsyncPostgresSaver.setup()` 在首次连�
 
 ## 7. 部署形态
 
-两个进程：
+三个进程：
 
 ```
 1. FastAPI 主进程            uv run fastapi dev backend/app/main.py
-   ├── 入站 webhook 处理
+   ├── 入站 webhook 处理（WeCom HTTP / Feishu HTTP）
    ├── Bus consumer task（背景 asyncio）
    └── Slack 路由 + 客户路由
 
@@ -223,6 +246,11 @@ LangGraph 的 PG checkpointer 表由 `AsyncPostgresSaver.setup()` 在首次连�
    ├── 物流 / 广告 / 复购定时任务
    ├── 会话总结延迟任务
    └── 长期记忆抽取任务
+
+3. WeCom 智能机器人 Worker    uv run python -m backend.app.wecom_aibot_worker
+   ├── 持久 WebSocket（重连 + 心跳）
+   ├── 入站 frame → SystemMessage → bus（与 HTTP 渠道共用）
+   └── 订阅 Redis pub/sub `wecom_aibot:outbound` 转发出站
 ```
 
 `docker/docker-compose.yml` 提供 pgvector pg16 + redis 7-alpine。生产部署文档是 Phase-3 范围。

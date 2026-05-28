@@ -165,6 +165,41 @@ CLAUDE.md 明确规定：bus 仅 reactive-inbound。直接走 channel adapter �
 | `subagent(task, context_mode=...)` | 单轮 LLM 子任务调用；shared 模式带父 messages 末尾 10 条 |
 | `{server_id}__{tool}` | MCP 工具，结果走 L1+L2 缓存（写类按配置 opt-out） |
 
+### 2.5 WeCom 智能机器人 WS 变体（Phase-3 G）
+
+智能机器人不走 HTTP webhook，而是客户端持有一条长连 WS。入站/出站全部由独立 worker 进程（`backend/app/wecom_aibot_worker.py`）承担：
+
+```
+┌──────────────────────────────┐
+│ WeCom 智能机器人 WS endpoint │  ← 持久连接
+└────────────┬─────────────────┘
+             │ frame
+             ▼
+┌─────────────────────────────────────────────────┐
+│ wecom_aibot_worker 进程                          │
+│  WecomAibotClient.run():                        │
+│   1. 指数退避重连 1s→60s + 30s 心跳              │
+│   2. 解析 frame → SystemMessage(channel=         │
+│      "wecom_aibot")                             │
+│   3. Debouncer.observe → BusProducer.enqueue    │  ← 与 HTTP 渠道共用同一条 bus
+└─────────────────────────────────────────────────┘
+             ▼
+        （后续与 §2.1 完全一致：bus → consumer → graph）
+```
+
+出站方向因为 WS 连接只在 worker 进程里，FastAPI 主进程 / ARQ worker / Slack handoff 都不能直接发送。所以出站走 Redis pub/sub：
+
+```
+sends["wecom_aibot"](user_id, text)
+  → WecomAibotOutbound.send_text()
+  → redis.publish("wecom_aibot:outbound", {channel_user_id, text})
+  ─────────────────────────────────────────────
+  wecom_aibot_worker 内的 pub/sub 订阅 task:
+    on message → WecomAibotClient.send_text(WS frame)
+```
+
+这样任何进程都可以"调 send_text"，而真正的 WS 写操作集中在 worker，串行可控。`WECOM_AIBOT_WS_URL` 为空时 worker 启动后立即退出，部署上跳过该渠道无成本。
+
 ## 3. 主动触达（Phase-2 P2）
 
 ARQ worker 是独立进程（`make cron`）。

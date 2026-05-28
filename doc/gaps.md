@@ -188,7 +188,9 @@ if proactive:
 
 ## 2. Phase-3 待办（按优先级）
 
-Phase-2 已全部落地（P0 Slack handoff / P1 MCP / P2 ARQ Cron / P3 长记忆 / 通用 subagent / P4 Skill 加载器）。剩下的是运维 / 性能 / 多租户三块。
+Phase-2 已全部落地（P0 Slack handoff / P1 MCP / P2 ARQ Cron / P3 长记忆 / 通用 subagent / P4 Skill 加载器）。
+
+Phase-3 进度：Group A（启动健康自检）/ B（token 计数器）/ C（三层记忆 + 中段压缩）/ D（工具死循环 + 熔断）/ E（intent / reflection 节点）/ F（情绪兜底接管）/ G（WeCom 智能机器人 WS 渠道，含独立 worker + Redis 出站通道）已合入 main。剩下的是运维 / 性能 / 多租户三块。
 
 ### P0：可观测性 + 运维
 
