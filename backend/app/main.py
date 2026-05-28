@@ -28,6 +28,7 @@ from backend.app.channels.feishu.router import build_router as build_feishu_rout
 from backend.app.channels.wecom.crypto import WecomCrypto
 from backend.app.channels.wecom.outbound import WecomOutbound
 from backend.app.channels.wecom.router import build_router as build_wecom_router
+from backend.app.channels.wecom_aibot.outbound import WecomAibotOutbound
 from backend.app.gateway.middleware import RequestIdMiddleware
 from backend.app.gateway.routers import health
 from backend.app.operator.slack.outbound import SlackOutbound
@@ -87,6 +88,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app_id=settings.feishu.app_id,
         app_secret=settings.feishu.app_secret,
     )
+    wecom_aibot_outbound = WecomAibotOutbound(
+        redis,
+        pubsub_channel=settings.wecom_aibot.outbound_pubsub_channel,
+    )
 
     redis_ckpt = RedisCheckpointer(redis, ttl_seconds=settings.memory.working_ttl_seconds)
     llm_caller = LLMCaller(settings.llm)
@@ -120,6 +125,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     sends = {
         "wecom": wecom_outbound.send_text,
         "feishu": feishu_outbound.send_text,
+        "wecom_aibot": wecom_aibot_outbound.send_text,
     }
 
     # Phase-2 P0: Slack operator adapter + durable Postgres checkpointer

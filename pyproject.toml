@@ -27,6 +27,7 @@ dependencies = [
     "cryptography>=43.0",
     "mmh3>=5.0",
     "python-multipart>=0.0.9",
+    "websockets>=13",
 ]
 
 [dependency-groups]

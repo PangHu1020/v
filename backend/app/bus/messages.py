@@ -11,7 +11,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-ChannelSlug = Literal["wecom", "feishu"]
+ChannelSlug = Literal["wecom", "feishu", "wecom_aibot"]
 
 
 class SystemMessage(BaseModel):

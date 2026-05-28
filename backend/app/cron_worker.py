@@ -25,6 +25,7 @@ from arq.cron import cron
 
 from backend.app.channels.feishu.outbound import FeishuOutbound
 from backend.app.channels.wecom.outbound import WecomOutbound
+from backend.app.channels.wecom_aibot.outbound import WecomAibotOutbound
 from backend.app.store import close_client, close_pool, create_client, create_pool
 from backend.v.configs import get_settings
 from backend.v.cron import (
@@ -72,6 +73,10 @@ async def on_startup(ctx: dict[str, Any]) -> None:
         app_id=settings.feishu.app_id,
         app_secret=settings.feishu.app_secret,
     )
+    wecom_aibot_outbound = WecomAibotOutbound(
+        redis,
+        pubsub_channel=settings.wecom_aibot.outbound_pubsub_channel,
+    )
 
     ctx.update(
         {
@@ -80,9 +85,11 @@ async def on_startup(ctx: dict[str, Any]) -> None:
             "redis": redis,
             "wecom_outbound": wecom_outbound,
             "feishu_outbound": feishu_outbound,
+            "wecom_aibot_outbound": wecom_aibot_outbound,
             "sends": {
                 "wecom": wecom_outbound.send_text,
                 "feishu": feishu_outbound.send_text,
+                "wecom_aibot": wecom_aibot_outbound.send_text,
             },
             "llm_caller": LLMCaller(settings.llm),
             "embedder": get_embedding(settings.llm, settings.embedding),

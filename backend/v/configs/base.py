@@ -132,6 +132,24 @@ class WecomSettings(BaseSettings):
     aes_key: str = ""
 
 
+class WecomAibotSettings(BaseSettings):
+    """WeCom 智能机器人 (WebSocket) adapter settings (Phase-3 Group G).
+
+    Unlike the HTTP webhook ``WecomSettings``, the 智能机器人 adapter
+    runs as a standalone worker process that holds a single persistent
+    WebSocket. Outbound deliveries are funnelled through a Redis pub/sub
+    channel so any process (FastAPI app, ARQ worker, Slack handoff) can
+    publish a reply and the worker forwards it over its WS.
+    """
+
+    model_config = SettingsConfigDict(**_COMMON, env_prefix="WECOM_AIBOT_")
+
+    ws_url: str = ""
+    token: str = ""
+    heartbeat_seconds: int = Field(default=30, ge=1)
+    outbound_pubsub_channel: str = "wecom_aibot:outbound"
+
+
 class FeishuSettings(BaseSettings):
     """Feishu (飞书) customer-side webhook credentials."""
 
@@ -229,6 +247,7 @@ class AppSettings(BaseModel):
     memory: MemorySettings
     bus: BusSettings
     wecom: WecomSettings
+    wecom_aibot: WecomAibotSettings
     feishu: FeishuSettings
     slack: SlackSettings
     mcp: MCPSettings
@@ -253,6 +272,7 @@ def get_settings() -> AppSettings:
         memory=MemorySettings(),
         bus=BusSettings(),
         wecom=WecomSettings(),
+        wecom_aibot=WecomAibotSettings(),
         feishu=FeishuSettings(),
         slack=SlackSettings(),
         mcp=MCPSettings(),
