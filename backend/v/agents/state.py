@@ -39,3 +39,13 @@ class CustomerServiceState(TypedDict, total=False):
     user_profile: dict[str, Any] | None
     recent_events: list[dict[str, Any]]
     interrupt_payload: dict[str, Any] | None
+    # Phase-3 Group D: tool safety guards
+    tool_fingerprints: list[str]
+    """Fingerprints of every tool call in this session (``tool:args``).
+    Used by the dead-loop detector in :mod:`backend.v.hooks.tool_guard`."""
+    tool_error_counts: dict[str, int]
+    """Per-tool error counts for the circuit breaker."""
+    force_handoff: bool
+    """Set by the tool guard when a loop or circuit-open condition is
+    detected. ``agent_node`` checks this and injects a
+    ``transfer_to_human`` call instead of asking the LLM."""

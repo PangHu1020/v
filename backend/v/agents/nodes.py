@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 from backend.v.agents.state import CustomerServiceState
@@ -130,16 +130,31 @@ async def agent_node(
 ) -> dict[str, Any]:
     """Invoke the main-tier LLM and append its reply to ``messages``.
 
-    The tool list is provided either explicitly (via :func:`functools.partial`
-    in :func:`backend.v.agents.graph.build_graph`) or implicitly via
-    :data:`AGENT_TOOLS`. The graph wires both the LLM binding and the
-    downstream ``ToolNode`` from the same list so what the LLM sees and
-    what gets dispatched are guaranteed identical.
+    Phase-3 Group D: when ``state["force_handoff"]`` is set by the tool
+    guard, skip the LLM and inject a ``transfer_to_human`` tool call
+    directly so the interrupt fires on the next ToolNode pass.
     """
     cfg = config.get("configurable", {}) if config else {}
     caller: LLMCaller | None = cfg.get("llm_caller")
     if caller is None:
         raise RuntimeError("agent_node requires config['configurable']['llm_caller']")
+
+    if state.get("force_handoff"):
+        _log.warning("agents.agent_node.force_handoff")
+        return {
+            "messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "force-handoff-0",
+                            "name": "transfer_to_human",
+                            "args": {"reason": "工具安全机制触发强制转人工"},
+                        }
+                    ],
+                )
+            ]
+        }
 
     bound_tools = tools if tools is not None else AGENT_TOOLS
     result = await caller.chat(
