@@ -37,7 +37,7 @@
 │ /backend/app/channels/debounce   │  500ms 静默窗口、合并 burst
 └────────┬─────────────────────────┘
          ▼ (after 500ms idle)
-┌────────────────────────────��─────┐
+┌──────────────────────────────────┐
 │ /backend/app/bus/producer        │  XADD bus:{shard}
 └────────┬─────────────────────────┘
          ▼
@@ -310,7 +310,7 @@ INSERT agent.    GET 命中             session 键自然过期    （+ 长记�
 
 跨 session 的连续性靠**长期记忆**保证：
 
-- `user_profile` 每次 `on_session_start` 全量注入��� SystemMessage（已实现）。
+- `user_profile` 每次 `on_session_start` 全量注入到 SystemMessage（已实现）。
 - `memory_episodes` 通过 `recall_memory` 工具按需召回（Phase-2 P3 实现）。
 - 抽取链：`consolidate_session` 写 session_memory → `extract_session_memory` 写 user_profile + memory_episodes（Phase-2 P3 实现）。
 
@@ -331,7 +331,7 @@ INSERT agent.    GET 命中             session 键自然过期    （+ 长记�
 │ Redis  ckpt:{thread_id}  TTL=1800s                 │  ← LangGraph state（热路径）
 │ Redis  profile:{ch}:{u}  TTL=1800s                 │  ← user_profile 缓存
 │ Redis  session:{ch}:{u}  TTL=3600s                 │  ← 当前 session_id
-│ Redis  last_seen:{ch}:{u} TTL=3600s                │  ← 静默判���
+│ Redis  last_seen:{ch}:{u} TTL=3600s                │  ← 静默判断
 │ Redis  session_status:{session_id}                 │  ← active / suspended（P2 P0）
 │ Redis  proactive_log:{ch}:{u} TTL=30d              │  ← 主动消息历史（P2 P2）
 │ Redis  operator_log:{session_id} TTL=7d            │  ← 人工回复缓存（P2 P0）

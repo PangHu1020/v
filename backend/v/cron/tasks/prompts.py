@@ -38,7 +38,7 @@ profile_updates：
 </layers>
 
 <output_format>
-仅输出 JSON 对象，���名严格使用：profile_updates、working_memories、event_memories。
+仅输出 JSON 对象，键名严格使用：profile_updates、working_memories、event_memories。
 - profile_updates：空 dict，本任务不写画像。
 - working_memories：list[MemoryEntry]，每条 {content, kind, importance(0-1), keywords}。\
 created_at 不需要给，会自动填当前时间。
@@ -48,7 +48,7 @@ created_at 不需要给，会自动填当前时间。
 
 <rules>
 - "事实"和"评价"分开：working_memories 可写"客户语气急切"这种观察，event_memories 不写。
-- 一条句子要自洽��"客户咨询过棉质短袖"，不是"短袖"）。
+- 一条句子要自洽（"客户咨询过棉质短袖"，不是"短袖"）。
 - 客户身份信息（手机号、身份证、详细住址）原文不要写进 content；用占位符（"已收集到收货地址"）。
 - 每个 MemoryEntry 的 kind 必须是 preference / observation / event 之一：
   · preference  → 偏好类陈述（"偏好顺丰"），通常进 working_memories；本任务不直接进 user_profile。

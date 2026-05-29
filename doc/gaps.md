@@ -257,7 +257,7 @@ Phase-3 进度：Group A（启动健康自检）/ B（token 计数器）/ C（�
 | 出站不走 bus | [backend/app/CLAUDE.md](../backend/app/CLAUDE.md) | 入站流不被回执污染；出站语义本来就是直连 |
 | RedisCheckpointer 归在 `backend/v/agents/` 而非 `memory/` | [backend/v/agents/checkpointer.py](../backend/v/agents/checkpointer.py) | checkpointer 是 agent 运行时（state 存档）的一部分，不是用户级记忆 |
 | 30min 静默后开新 session_id | [doc/data_flow.md §5](data_flow.md) | 旧上下文大概率无关 + 浪费 token；连续性靠长记忆兜底 |
-| Slack 接管期间客���消息直接转发，不入 graph | [backend/app/bus/worker.py](../backend/app/bus/worker.py) | 操作员在 Slack 已经看到，graph suspended 状态下也无法处理 |
+| Slack 接管期间客户消息直接转发，不入 graph | [backend/app/bus/worker.py](../backend/app/bus/worker.py) | 操作员在 Slack 已经看到，graph suspended 状态下也无法处理 |
 | Channel 层做 debounce 而非 bus 层 | [backend/app/CLAUDE.md](../backend/app/CLAUDE.md) | bus 是路由 + 并发控制层；语义合并属于平台适配 |
 | 单 LLM provider（DeepSeek）+ 同家族降级 | [backend/v/CLAUDE.md](../backend/v/CLAUDE.md) | 跨家族降级会引入风格 / 协议差异 |
 | MCP 工具命名带 server_id 前缀 | [backend/v/mcp/registry.py](../backend/v/mcp/registry.py) | 不同 server 可能有同名工具（如 search），前缀消除歧义 |

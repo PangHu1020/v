@@ -46,7 +46,7 @@ def _format_recall(rows: list[dict[str, Any]]) -> str:
         when = "今天" if age < 1 else f"{int(age)} 天前"
         kind_tag = f"[{r['kind']}]" if r.get("kind") else ""
         lines.append(f"- ({when}){kind_tag} {r['content']}")
-    return "客户历史记忆（按相关度+时效+重要性���合排序）：\n" + "\n".join(lines)
+    return "客户历史记忆（按相关度+时效+重要性综合排序）：\n" + "\n".join(lines)
 
 
 async def _recall(

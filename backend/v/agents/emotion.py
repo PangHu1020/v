@@ -46,7 +46,7 @@ class EmotionDetector(Protocol):
         ...
 
 
-# ── Keyword scorer ──────────────────────────��─────────────────────────────────
+# ── Keyword scorer ────────────────────────────────────────────────────────────
 
 # Chinese anger indicators — sampled broadly; weights are heuristic.
 _HIGH_ANGER_PATTERNS: list[tuple[re.Pattern, float]] = [
