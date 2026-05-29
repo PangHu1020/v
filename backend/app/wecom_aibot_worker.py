@@ -108,7 +108,8 @@ async def main() -> None:
 
     client = WecomAibotClient(
         ws_url=settings.wecom_aibot.ws_url,
-        token=settings.wecom_aibot.token,
+        bot_id=settings.wecom_aibot.bot_id,
+        secret=settings.wecom_aibot.secret,
         heartbeat_seconds=settings.wecom_aibot.heartbeat_seconds,
         debouncer=debouncer,
     )

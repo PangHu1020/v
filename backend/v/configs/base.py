@@ -140,12 +140,17 @@ class WecomAibotSettings(BaseSettings):
     WebSocket. Outbound deliveries are funnelled through a Redis pub/sub
     channel so any process (FastAPI app, ARQ worker, Slack handoff) can
     publish a reply and the worker forwards it over its WS.
+
+    Auth is the WeCom 智能机器人 ``aibot_subscribe`` handshake:
+    ``{bot_id, secret}`` posted as the first frame after connect — NOT
+    an HTTP ``Authorization`` header.
     """
 
     model_config = SettingsConfigDict(**_COMMON, env_prefix="WECOM_AIBOT_")
 
     ws_url: str = ""
-    token: str = ""
+    bot_id: str = ""
+    secret: str = ""
     heartbeat_seconds: int = Field(default=30, ge=1)
     outbound_pubsub_channel: str = "wecom_aibot:outbound"
 
