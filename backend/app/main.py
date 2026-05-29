@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 
@@ -76,17 +77,35 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         dispatch=channel_to_bus,
     )
 
-    wecom_crypto = WecomCrypto(settings.wecom.aes_key, settings.wecom.corp_id)
-    feishu_crypto = FeishuCrypto(settings.feishu.encrypt_key)
+    # Per-channel enable predicates. A channel is "enabled" when its
+    # required credentials are present in the env. Disabled channels skip
+    # adapter construction AND router mount, so a deployment that only
+    # uses, e.g., the WeCom 智能机器人 WS worker doesn't need to fill in
+    # WeCom HTTP webhook keys to start.
+    wecom_enabled = bool(settings.wecom.corp_id and settings.wecom.aes_key)
+    feishu_enabled = bool(settings.feishu.encrypt_key)
 
-    wecom_outbound = WecomOutbound(
-        corp_id=settings.wecom.corp_id,
-        secret=settings.wecom.secret,
-        agent_id=settings.wecom.agent_id,
+    wecom_crypto = (
+        WecomCrypto(settings.wecom.aes_key, settings.wecom.corp_id) if wecom_enabled else None
     )
-    feishu_outbound = FeishuOutbound(
-        app_id=settings.feishu.app_id,
-        app_secret=settings.feishu.app_secret,
+    feishu_crypto = FeishuCrypto(settings.feishu.encrypt_key) if feishu_enabled else None
+
+    wecom_outbound = (
+        WecomOutbound(
+            corp_id=settings.wecom.corp_id,
+            secret=settings.wecom.secret,
+            agent_id=settings.wecom.agent_id,
+        )
+        if wecom_enabled
+        else None
+    )
+    feishu_outbound = (
+        FeishuOutbound(
+            app_id=settings.feishu.app_id,
+            app_secret=settings.feishu.app_secret,
+        )
+        if feishu_enabled
+        else None
     )
     wecom_aibot_outbound = WecomAibotOutbound(
         redis,
@@ -122,11 +141,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     graph = build_graph(redis_ckpt, extra_tools=mcp_registry.tools)
 
-    sends = {
-        "wecom": wecom_outbound.send_text,
-        "feishu": feishu_outbound.send_text,
-        "wecom_aibot": wecom_aibot_outbound.send_text,
-    }
+    sends: dict[str, Any] = {"wecom_aibot": wecom_aibot_outbound.send_text}
+    if wecom_outbound is not None:
+        sends["wecom"] = wecom_outbound.send_text
+    if feishu_outbound is not None:
+        sends["feishu"] = feishu_outbound.send_text
 
     # Phase-2 P0: Slack operator adapter + durable Postgres checkpointer
     # for handoff. Wired in lazily so deployments without Slack credentials
@@ -249,8 +268,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.mcp_registry = mcp_registry
 
     # Mount channel routers now that adapters are constructed.
-    app.include_router(build_wecom_router(settings.wecom, wecom_crypto, debouncer))
-    app.include_router(build_feishu_router(settings.feishu, feishu_crypto, debouncer))
+    if wecom_enabled:
+        app.include_router(build_wecom_router(settings.wecom, wecom_crypto, debouncer))
+        _log.info("app.channels.wecom.enabled")
+    if feishu_enabled:
+        app.include_router(build_feishu_router(settings.feishu, feishu_crypto, debouncer))
+        _log.info("app.channels.feishu.enabled")
 
     try:
         yield
@@ -265,8 +288,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             pass
         if slack_outbound is not None:
             await slack_outbound.aclose()
-        await wecom_outbound.aclose()
-        await feishu_outbound.aclose()
+        if wecom_outbound is not None:
+            await wecom_outbound.aclose()
+        if feishu_outbound is not None:
+            await feishu_outbound.aclose()
         await mcp_registry.aclose()
         await exit_stack.aclose()
         await close_client(redis)

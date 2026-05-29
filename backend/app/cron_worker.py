@@ -135,7 +135,7 @@ class WorkerSettings:
     max_jobs = 10
     job_timeout = 120
 
-    @classmethod
-    def redis_settings(cls) -> ArqRedisSettings:
-        settings = get_settings()
-        return _arq_redis_settings(settings.arq.effective_redis_url(settings.redis.url))
+    # ARQ reads ``redis_settings`` as a plain class attribute (not a
+    # classmethod / property). Resolve the URL once at class load.
+    _settings = get_settings()
+    redis_settings = _arq_redis_settings(_settings.arq.effective_redis_url(_settings.redis.url))
