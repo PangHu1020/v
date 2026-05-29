@@ -1,4 +1,4 @@
-"""Unit tests for the ``/health`` endpoint."""
+"""Unit tests for the ``/livez``, ``/readyz``, and legacy ``/health`` endpoints."""
 
 from __future__ import annotations
 
@@ -45,6 +45,48 @@ async def degraded_client() -> AsyncClient:
         yield c
 
 
+@pytest.fixture
+async def all_down_client() -> AsyncClient:
+    app = _build_app(pg_ok=False, redis_ok=False)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        yield c
+
+
+class TestLivez:
+    async def test_always_ok_when_healthy(self, healthy_client: AsyncClient) -> None:
+        resp = await healthy_client.get("/livez")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+
+    async def test_ok_even_when_deps_down(self, all_down_client: AsyncClient) -> None:
+        # Liveness must NOT fail on dep outage — restarting the process
+        # won't bring Postgres back, so k8s should leave it alone.
+        resp = await all_down_client.get("/livez")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+
+
+class TestReadyz:
+    async def test_ready_when_all_deps_ok(self, healthy_client: AsyncClient) -> None:
+        resp = await healthy_client.get("/readyz")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok", "postgres": "ok", "redis": "ok"}
+
+    async def test_503_when_postgres_down(self, degraded_client: AsyncClient) -> None:
+        resp = await degraded_client.get("/readyz")
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["status"] == "down"
+        assert body["postgres"] == "down"
+        assert body["redis"] == "ok"
+
+    async def test_503_when_all_deps_down(self, all_down_client: AsyncClient) -> None:
+        resp = await all_down_client.get("/readyz")
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body == {"status": "down", "postgres": "down", "redis": "down"}
+
+
 class TestHealth:
     async def test_healthy(self, healthy_client: AsyncClient) -> None:
         resp = await healthy_client.get("/health")
@@ -54,6 +96,7 @@ class TestHealth:
 
     async def test_partial_failure_reports_down_overall(self, degraded_client: AsyncClient) -> None:
         resp = await degraded_client.get("/health")
+        # Legacy /health always returns 200 — failure surfaces only in the body.
         assert resp.status_code == 200
         body = resp.json()
         assert body["status"] == "down"

@@ -65,16 +65,13 @@ LangGraph checkpoint id 是 ULID 风格、单调递增字符串，所以字典�
 
 当前选 ②。多实例部署时考虑 ①。
 
-### 1.6 Health 端点不区分 ready vs live
+### 1.6 Health 端点不区分 ready vs live ✅（已收敛）
 
-[backend/app/gateway/routers/health.py:health](../backend/app/gateway/routers/health.py) 只有一个端点。
+[backend/app/gateway/routers/health.py](../backend/app/gateway/routers/health.py) 现在拆成三个：
 
-K8s 习惯：
-
-- liveness：进程活着即可（不查依赖）。
-- readiness：所有依赖（PG + Redis + bus consumer task）都健康。
-
-**建议**：拆 `/livez`（永远 200）+ `/readyz`（依赖检查）。
+- `/livez` — 永远 `200`，依赖故障**不**翻牌（避免 k8s crash-loop）。
+- `/readyz` — 依赖全 ok 时 `200`，任一挂掉返回 `503`，body 里报 down。
+- `/health` — 老接口，永远 `200`，body 里携带 down，向后兼容。
 
 ### 1.7 main.py lifespan 异常处理薄
 

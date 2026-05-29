@@ -130,6 +130,16 @@ uv run pytest --cov=backend --cov-fail-under=80
 uv run ruff check . --fix && uv run ruff format .
 ```
 
+### 健康探针
+
+FastAPI 进程暴露三个探针端点：
+
+| 端点 | 状态码 | 用途 |
+| --- | --- | --- |
+| `GET /livez` | 始终 `200` | k8s liveness — 进程能应答即活。依赖故障**不**翻牌，避免 crash-loop |
+| `GET /readyz` | 依赖全 ok 时 `200`，否则 `503` | k8s readiness — Postgres / Redis 任一挂掉就把实例从 LB 摘掉 |
+| `GET /health` | 始终 `200`（响应体里报 down） | 老接口，向后兼容；新探针请用上面两个 |
+
 ## 7. 开发约定速查
 
 - 严格分层：`/backend/app/` 只做 I/O / 路由 / 归一化；`/backend/v/` 只做 Agent 逻辑。`/v/` 不许 import `/app/`。
