@@ -148,6 +148,49 @@ class TestHandlerEndToEnd:
         # llm_caller invoked at least once (intent + agent + reflection all call it).
         assert llm_caller.chat.await_count >= 1
 
+    async def test_multi_segment_reply_splits_on_blank_line(
+        self, redis_client: fakeredis.aioredis.FakeRedis
+    ) -> None:
+        """A reply with ``\\n\\n`` splits into multiple outbound sends."""
+        ckpt = RedisCheckpointer(redis_client, ttl_seconds=600)
+        graph = build_graph(ckpt)
+
+        llm_caller = MagicMock()
+        llm_caller.chat = AsyncMock(
+            return_value=LLMResult(
+                message=AIMessage(
+                    content="第一步：登录账户\n\n第二步：进入订单页\n\n第三步：点击退款"
+                ),
+                model="m",
+                role="main_primary",
+                fallback_used=False,
+                latency_ms=1,
+            )
+        )
+
+        sent: list[tuple[str, str]] = []
+
+        async def wecom_send(channel_user_id: str, text: str) -> None:
+            sent.append((channel_user_id, text))
+
+        handler = make_bus_handler(
+            graph=graph,
+            pool=_fake_pool({"profile": {}}),
+            redis=redis_client,
+            llm_caller=llm_caller,
+            sends={"wecom": wecom_send},
+            silence_seconds=1800,
+            cache_ttl_seconds=120,
+        )
+
+        await handler(_msg(text="如何退款？", user="ext-99"))
+
+        assert sent == [
+            ("ext-99", "第一步：登录账户"),
+            ("ext-99", "第二步：进入订单页"),
+            ("ext-99", "第三步：点击退款"),
+        ]
+
     async def test_two_turns_within_session_share_thread_id(
         self, redis_client: fakeredis.aioredis.FakeRedis
     ) -> None:

@@ -44,6 +44,7 @@ from backend.v.hooks.handoff import (
 from backend.v.hooks.session import on_session_start
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.utils.logging import bind_request, get_logger
+from backend.v.utils.reply import split_reply_segments
 
 _log = get_logger("bus.worker")
 
@@ -328,15 +329,23 @@ def make_bus_handler(
                 # 4) Normal reply.
                 reply = _last_ai_message(final_state.get("messages", []))
                 send_ms = 0
+                segments_sent = 0
                 if reply:
                     send = sends.get(msg.channel)
                     if send is None:
                         _log.error("bus.worker.no_send_registered", channel=msg.channel)
                     else:
+                        segments = split_reply_segments(reply)
                         t2 = time.perf_counter()
-                        await send(msg.channel_user_id, reply)
+                        for seg in segments:
+                            await send(msg.channel_user_id, seg)
                         send_ms = int((time.perf_counter() - t2) * 1000)
-                        _log.info("bus.worker.replied", reply_len=len(reply))
+                        segments_sent = len(segments)
+                        _log.info(
+                            "bus.worker.replied",
+                            reply_len=len(reply),
+                            segments=segments_sent,
+                        )
                 else:
                     _log.warning("bus.worker.no_ai_message")
 
@@ -355,6 +364,7 @@ def make_bus_handler(
                     send_ms=send_ms,
                     text_len=len(msg.text),
                     reply_len=len(reply or ""),
+                    segments_sent=segments_sent,
                 )
 
     return handle

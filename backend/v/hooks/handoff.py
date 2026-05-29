@@ -33,6 +33,7 @@ from backend.v.agents.checkpoints.migration import migrate_cold_to_hot, migrate_
 from backend.v.agents.checkpoints.redis import RedisCheckpointer
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.utils.logging import bind_request, get_logger
+from backend.v.utils.reply import split_reply_segments
 
 _log = get_logger("hooks.handoff")
 
@@ -231,8 +232,14 @@ async def on_resume(
             if send is None:
                 _log.error("hooks.handoff.resume.no_send_registered", channel=channel)
             else:
-                await send(channel_user_id, reply)
-                _log.info("hooks.handoff.resume.replied", reply_len=len(reply))
+                segments = split_reply_segments(reply)
+                for seg in segments:
+                    await send(channel_user_id, seg)
+                _log.info(
+                    "hooks.handoff.resume.replied",
+                    reply_len=len(reply),
+                    segments=len(segments),
+                )
         else:
             _log.warning("hooks.handoff.resume.no_ai_reply")
         return reply
