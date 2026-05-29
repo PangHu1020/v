@@ -28,7 +28,22 @@ class TestSystemPrompt:
     def test_empty_profile_dict(self) -> None:
         prompt = _system_prompt({}, "feishu")
         assert "feishu" in prompt
-        assert "客户档案" not in prompt
+        # No profile values present → the customer_profile section is omitted.
+        assert "<customer_profile>" not in prompt
+
+    def test_renders_xml_structure(self) -> None:
+        prompt = _system_prompt(None, "wecom")
+        for tag in ("<role>", "</role>", "<goal>", "<capabilities>", "<style>", "<constraints>"):
+            assert tag in prompt
+
+    def test_profile_uses_xml_subtags(self) -> None:
+        prompt = _system_prompt(
+            {"customer_name": "张三", "member_level": "白银"},
+            "wecom",
+        )
+        assert "<customer_profile>" in prompt
+        assert "<name>张三</name>" in prompt
+        assert "<member_level>白银</member_level>" in prompt
 
 
 class TestEnterNode:

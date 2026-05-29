@@ -232,6 +232,9 @@ def make_bus_handler(
                     return
 
                 # 2) Normal path.
+                turn_started = time.perf_counter()
+
+                t0 = time.perf_counter()
                 bootstrap = await on_session_start(
                     pool=pool,
                     redis=redis,
@@ -240,6 +243,7 @@ def make_bus_handler(
                     cache_ttl_seconds=cache_ttl_seconds,
                     recent_events_limit=recent_events_to_inject,
                 )
+                session_start_ms = int((time.perf_counter() - t0) * 1000)
                 profile = bootstrap["profile"]
                 recent_events = bootstrap["recent_events"]
 
@@ -287,7 +291,9 @@ def make_bus_handler(
                     session_minted=minted,
                     text_len=len(msg.text),
                 )
+                t1 = time.perf_counter()
                 final_state = await graph.ainvoke(input_state, config=config)
+                graph_ms = int((time.perf_counter() - t1) * 1000)
 
                 # 3) Interrupt: graph paused at transfer_to_human.
                 if handoff_enabled:
@@ -318,12 +324,15 @@ def make_bus_handler(
 
                 # 4) Normal reply.
                 reply = _last_ai_message(final_state.get("messages", []))
+                send_ms = 0
                 if reply:
                     send = sends.get(msg.channel)
                     if send is None:
                         _log.error("bus.worker.no_send_registered", channel=msg.channel)
                     else:
+                        t2 = time.perf_counter()
                         await send(msg.channel_user_id, reply)
+                        send_ms = int((time.perf_counter() - t2) * 1000)
                         _log.info("bus.worker.replied", reply_len=len(reply))
                 else:
                     _log.warning("bus.worker.no_ai_message")
@@ -333,6 +342,16 @@ def make_bus_handler(
                     channel=msg.channel,
                     channel_user_id=msg.channel_user_id,
                     silence_seconds=silence_seconds,
+                )
+
+                _log.info(
+                    "bus.worker.turn_complete",
+                    total_ms=int((time.perf_counter() - turn_started) * 1000),
+                    session_start_ms=session_start_ms,
+                    graph_ms=graph_ms,
+                    send_ms=send_ms,
+                    text_len=len(msg.text),
+                    reply_len=len(reply or ""),
                 )
 
     return handle

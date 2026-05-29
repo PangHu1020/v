@@ -16,6 +16,7 @@ identity) so the agent has cross-session continuity.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -36,25 +37,56 @@ Phase-2 P3 added ``recall_memory`` and ``subagent``."""
 
 
 def _system_prompt(profile: dict[str, Any] | None, channel: str) -> str:
-    """Render the base per-turn system prompt without skill injection."""
-    base = (
-        "你是一名外部���户服务助理，正在通过 "
-        f"{channel} 与客户对话。回复要简短、礼貌、准确；"
-        "若涉及订单、物流、退货等具体业务，按 SOP 给出明确步骤。"
-        "若问题超出你的能力或客户明确要求人工，请说明会转接人工。"
-    )
-    if not profile:
-        return base
-    bits = []
-    if name := profile.get("customer_name"):
-        bits.append(f"客户姓名：{name}")
-    if level := profile.get("member_level"):
-        bits.append(f"会员等级：{level}")
-    if pref := profile.get("preferred_language"):
-        bits.append(f"偏好语言：{pref}")
-    if not bits:
-        return base
-    return base + "\n\n已知客户档案：\n" + "\n".join(f"- {b}" for b in bits)
+    """Render the base per-turn system prompt without skill / events injection.
+
+    Returns an XML-tagged document. Tags are the LLM-friendly way to keep
+    role, behavioral guidance, channel-specific context, and customer
+    metadata visually separated — the model attends to them more reliably
+    than to a wall of prose.
+    """
+    profile_block = ""
+    if profile:
+        bits: list[str] = []
+        if name := profile.get("customer_name"):
+            bits.append(f"  <name>{name}</name>")
+        if level := profile.get("member_level"):
+            bits.append(f"  <member_level>{level}</member_level>")
+        if pref := profile.get("preferred_language"):
+            bits.append(f"  <preferred_language>{pref}</preferred_language>")
+        if bits:
+            profile_block = "\n<customer_profile>\n" + "\n".join(bits) + "\n</customer_profile>"
+
+    channel_text = channel or "未知渠道"
+
+    return f"""<role>
+你是一名外部客户服务助理，正在通过 {channel_text} 与客户对话。
+</role>
+
+<goal>
+准确、礼貌、高效地解决客户的咨询；当问题超出能力或客户明确要求人工时，
+主动调用 transfer_to_human 工具转接。
+</goal>
+
+<capabilities>
+- 回答订单 / 物流 / 退换货 / 会员权益等常规咨询。
+- 调用工具：calculator（数值计算）、search（外部检索）、
+  recall_memory（按语义召回历史会话片段）、subagent（NL2SQL 查业务数据）、
+  transfer_to_human（转人工，会让对话进入人工接管态）。
+- 在工具结果支撑下给出结论；没有支撑时不要编造单号、价格、时间等具体事实。
+</capabilities>
+
+<style>
+- 简短、口语化、不堆砌套话。
+- 涉及具体业务时给出明确步骤而不是泛泛而谈。
+- 不暴露内部实现（"调用工具"、"检索 RAG"等技术名词）。
+- 默认中文；客户档案标注偏好语言时按其偏好。
+</style>
+
+<constraints>
+- 严禁伪造任���具体数字、时间、单号、商品 SKU。
+- 涉及退款 / 投诉 / 情绪激烈时优先转人工，不要自作主张承诺补偿。
+- 工具结果与客户陈述冲突时以工具结果为准，并礼貌指出差异。
+</constraints>{profile_block}"""
 
 
 def _latest_human_text(messages: list) -> str:
@@ -107,7 +139,7 @@ async def enter_node(
 
     events_block = render_recent_events_for_prompt(state.get("recent_events") or [])
     if events_block:
-        sections.append(events_block)
+        sections.append(f"<recent_context>\n{events_block}\n</recent_context>")
 
     skill_section = _maybe_skill_section(
         cfg.get("skill_registry"),
@@ -116,9 +148,16 @@ async def enter_node(
         top_k=int(cfg.get("skill_top_k", 3)),
     )
     if skill_section:
-        sections.append(skill_section)
+        sections.append(f"<sops>\n{skill_section}\n</sops>")
 
     full_prompt = "\n\n".join(sections)
+    _log.info(
+        "agents.enter_node.injected",
+        prompt_len=len(full_prompt),
+        events=len(state.get("recent_events") or []),
+        has_profile=bool(state.get("user_profile")),
+        has_skills=bool(skill_section),
+    )
     return {"messages": [SystemMessage(content=full_prompt)]}
 
 
@@ -139,6 +178,7 @@ async def agent_node(
     if caller is None:
         raise RuntimeError("agent_node requires config['configurable']['llm_caller']")
 
+    started = time.perf_counter()
     if state.get("force_handoff"):
         _log.warning("agents.agent_node.force_handoff")
         return {
@@ -167,6 +207,7 @@ async def agent_node(
         model=result.model,
         fallback_used=result.fallback_used,
         latency_ms=result.latency_ms,
+        elapsed_ms=int((time.perf_counter() - started) * 1000),
         has_tool_calls=bool(getattr(result.message, "tool_calls", None)),
         tool_count=len(bound_tools),
     )

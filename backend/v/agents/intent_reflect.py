@@ -17,6 +17,7 @@ unconditionally.
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Literal
 
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
@@ -67,6 +68,7 @@ async def intent_node(
     if caller is None:
         return {"intent": "general"}
 
+    started = time.perf_counter()
     messages = state.get("messages", [])
     # Find the latest HumanMessage text.
     latest_text = ""
@@ -107,7 +109,12 @@ async def intent_node(
         _log.warning("intent_node.failed", error=type(exc).__name__)
         return {"intent": "general"}
 
-    _log.info("intent_node.classified", intent=ir.intent, confidence=ir.confidence)
+    _log.info(
+        "intent_node.classified",
+        intent=ir.intent,
+        confidence=ir.confidence,
+        elapsed_ms=int((time.perf_counter() - started) * 1000),
+    )
     return {"intent": ir.intent}
 
 
@@ -159,6 +166,7 @@ async def reflection_node(
     if caller is None:
         return {}
 
+    started = time.perf_counter()
     messages = state.get("messages", [])
     reply = _last_ai_reply(messages)
     if not reply:
@@ -183,8 +191,16 @@ async def reflection_node(
         return {}
 
     if rr.passes:
-        _log.info("reflection_node.passed")
+        _log.info(
+            "reflection_node.passed",
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+        )
         return {}
 
-    _log.warning("reflection_node.failed_check", issues=rr.issues, retry=retries + 1)
+    _log.warning(
+        "reflection_node.failed_check",
+        issues=rr.issues,
+        retry=retries + 1,
+        elapsed_ms=int((time.perf_counter() - started) * 1000),
+    )
     return {"reflection_retries": retries + 1, "reflection_failed": True}
