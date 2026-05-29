@@ -221,6 +221,33 @@ class TestSendText:
         # respond_msg shouldn't carry chatid — req_id does the routing.
         assert "chatid" not in sent["body"]
 
+    async def test_req_id_consumed_so_followup_uses_send_msg(self) -> None:
+        """Multi-segment dispatch: first send is respond, rest are send.
+
+        Sending multiple respond_msg with the same req_id makes the
+        platform parallelize them, which breaks the customer-visible
+        ordering. The cached req_id must be popped on first use.
+        """
+        c = _make_client()
+        ws = AsyncMock()
+        c._ws = ws
+        c._last_req_ids["chat-z"] = "REQ-99"
+
+        await c.send_text("chat-z", "第一段")
+        await c.send_text("chat-z", "第二段")
+        await c.send_text("chat-z", "第三段")
+
+        first = json.loads(ws.send.await_args_list[0].args[0])
+        second = json.loads(ws.send.await_args_list[1].args[0])
+        third = json.loads(ws.send.await_args_list[2].args[0])
+
+        assert first["cmd"] == "aibot_respond_msg"
+        assert first["header"]["req_id"] == "REQ-99"
+        assert second["cmd"] == "aibot_send_msg"
+        assert second["body"]["chatid"] == "chat-z"
+        assert third["cmd"] == "aibot_send_msg"
+        assert "chat-z" not in c._last_req_ids
+
     async def test_truncates_to_max_message_length(self) -> None:
         c = _make_client()
         ws = AsyncMock()

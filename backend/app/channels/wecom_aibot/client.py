@@ -155,8 +155,14 @@ class WecomAibotClient:
         ``channel_user_id`` is the WeCom ``chatid`` we stored on the way
         in. If a recent ``req_id`` is cached for that chat we issue a
         routed ``aibot_respond_msg`` (the platform threads the reply to
-        the originating message). Otherwise we fall back to a proactive
-        ``aibot_send_msg``.
+        the originating message) **and consume the req_id** — only the
+        first reply to a given inbound callback can use ``respond``.
+        Subsequent replies (e.g., the 2nd/3rd segment of a multi-bubble
+        answer) fall through to a proactive ``aibot_send_msg``.
+
+        Reusing the same ``req_id`` across multiple ``respond`` frames
+        causes the platform to process them in parallel, breaking the
+        ordering the customer sees.
 
         Drops silently if no socket is currently connected.
         """
@@ -166,7 +172,7 @@ class WecomAibotClient:
             return
 
         content = text[:_MAX_MESSAGE_LEN]
-        req_id = self._last_req_ids.get(channel_user_id)
+        req_id = self._last_req_ids.pop(channel_user_id, None)
         if req_id:
             payload: dict[str, Any] = {
                 "cmd": _CMD_RESPOND,
