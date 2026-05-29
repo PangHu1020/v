@@ -36,7 +36,7 @@ LangGraph checkpoint id 是 ULID 风格、单调递增字符串，所以字典�
 
 抛出后由 worker 的 try/except 捕获 → 推 DLQ。但**回执已经丢失**——客户没收到 AI 回复，且 ack 已经发出去。
 
-**���议**：
+**修改建议**：
 
 - send_text 内部加 tenacity 重试（瞬时 5xx / 429 退避 3 次）。
 - 仍失败后写入 `agent.outbound_dlq` 表（新建），由人工或定时任务复投。

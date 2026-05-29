@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from backend.v.agents.emotion import (
+    HttpEmotionDetector,
     KeywordEmotionDetector,
     should_preempt_handoff,
 )
@@ -99,3 +100,15 @@ class TestShouldPreemptHandoff:
             )
             is True
         )
+
+
+class TestHttpEmotionDetector:
+    async def test_unreachable_endpoint_returns_zero(self) -> None:
+        # No server on port 1 — the connection refused error should be
+        # swallowed and a safe 0.0 returned.
+        det = HttpEmotionDetector("http://127.0.0.1:1", timeout=0.05)
+        assert await det.score("anything") == 0.0
+
+    def test_url_trailing_slash_stripped(self) -> None:
+        det = HttpEmotionDetector("http://x/", timeout=0.05)
+        assert det._base_url == "http://x"
