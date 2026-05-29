@@ -1,21 +1,23 @@
-"""``recall_memory``: long-term episodic recall via pgvector.
+"""``recall_memory``: long-term episodic recall via pgvector on ``agent.event_memory``.
 
-When the agent needs context that's not in the current session — past
-preferences, prior incidents, repeated complaints — it calls this tool
-with a natural-language query. We embed the query (Qwen
+When the active session's ``<recent_events>`` injection truncates an
+older fact the customer is now referring to, the agent can call this
+tool with a natural-language query. We embed the query (Qwen
 ``text-embedding-v4`` @ 1024-dim), run a cosine similarity search
-against ``agent.memory_episodes`` for that customer, and apply a
-recency-weighted re-ranking before returning the top-K formatted
-results.
+against ``agent.event_memory`` for that customer, and apply an
+importance + recency-weighted re-rank before returning the top-K
+formatted results.
 
-Recency weighting: an episode's effective score is ::
+Effective score per row::
 
-    weighted = cosine_similarity * exp(-age_days / half_life_days)
+    weighted = cosine_similarity
+             * exp(-age_days / half_life_days)
+             * (0.5 + 0.5 * importance)
 
-with a 30-day half-life. Episodes from the same week as the query are
-ranked roughly equal to "perfect match from a year ago, multiplied by
-0.5", which approximates how a human relationship tracks recent
-interactions over old ones.
+The importance multiplier ranges 0.5 (importance=0) → 1.0
+(importance=1) so an entry never gets fully zeroed out by low
+importance, but a critical entry (importance=1) outranks a trivial one
+of equal cosine + age.
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ DEFAULT_HALF_LIFE_DAYS = 30
 MAX_TOP_K = 20
 
 
-def _format_episodes(rows: list[dict[str, Any]]) -> str:
+def _format_recall(rows: list[dict[str, Any]]) -> str:
     """Render the recall results as a compact Chinese paragraph for the agent."""
     if not rows:
         return "（暂无相关历史记忆）"
@@ -42,8 +44,9 @@ def _format_episodes(rows: list[dict[str, Any]]) -> str:
     for r in rows:
         age = r["age_days"]
         when = "今天" if age < 1 else f"{int(age)} 天前"
-        lines.append(f"- ({when}) {r['content']}")
-    return "客户历史记忆（按相关度+时效综合排序）：\n" + "\n".join(lines)
+        kind_tag = f"[{r['kind']}]" if r.get("kind") else ""
+        lines.append(f"- ({when}){kind_tag} {r['content']}")
+    return "客户历史记忆（按相关度+时效+重要性���合排序）：\n" + "\n".join(lines)
 
 
 async def _recall(
@@ -56,7 +59,7 @@ async def _recall(
     top_k: int,
     half_life_days: float,
 ) -> list[dict[str, Any]]:
-    """Embed the query and query pgvector with recency-weighted re-rank."""
+    """Embed the query and query pgvector with importance + recency-weighted re-rank."""
     if not query:
         return []
     vector = await embedder.aembed_query(query)
@@ -65,25 +68,29 @@ async def _recall(
             SELECT
                 id,
                 content,
-                metadata,
+                kind,
+                importance,
+                keywords,
                 created_at,
                 EXTRACT(EPOCH FROM (now() - created_at)) / 86400 AS age_days,
                 1 - (embedding <=> $1::vector) AS similarity
-            FROM agent.memory_episodes
-            WHERE channel = $2 AND channel_user_id = $3
+            FROM agent.event_memory
+            WHERE channel = $2
+              AND channel_user_id = $3
+              AND (expires_at IS NULL OR expires_at > now())
             ORDER BY embedding <=> $1::vector
             LIMIT $4
         )
         SELECT
-            id, content, metadata, created_at, age_days, similarity,
-            similarity * exp(- age_days / $5) AS weighted_score
+            id, content, kind, importance, keywords, created_at,
+            age_days, similarity,
+            similarity
+              * exp(- age_days / $5)
+              * (0.5 + 0.5 * importance) AS weighted_score
         FROM ranked
         ORDER BY weighted_score DESC
         LIMIT $6
     """
-    # Two-stage: first take 3*top_k by raw cosine, then rerank by
-    # recency-weighted score and trim to top_k. The DB does both in one
-    # round-trip via the CTE.
     candidate_pool = max(top_k * 3, top_k)
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -95,21 +102,22 @@ async def _recall(
             half_life_days,
             top_k,
         )
-    # Touch last_accessed_at so future maintenance jobs can prune
-    # never-recalled episodes if needed.
+
     if rows:
         ids = [r["id"] for r in rows]
         async with pool.acquire() as conn:
             await conn.execute(
-                "UPDATE agent.memory_episodes SET last_accessed_at = now() "
-                "WHERE id = ANY($1::uuid[])",
+                "UPDATE agent.event_memory SET last_accessed_at = now() WHERE id = ANY($1::uuid[])",
                 ids,
             )
+
     return [
         {
             "id": str(r["id"]),
             "content": r["content"],
-            "metadata": dict(r["metadata"] or {}),
+            "kind": r["kind"],
+            "importance": float(r["importance"]),
+            "keywords": list(r["keywords"] or []),
             "age_days": float(r["age_days"]),
             "similarity": float(r["similarity"]),
             "weighted_score": float(r["weighted_score"]),
@@ -124,12 +132,12 @@ async def recall_memory(
     config: RunnableConfig,
     top_k: int = DEFAULT_TOP_K,
 ) -> str:
-    """Retrieve relevant long-term memories about THIS customer.
+    """Retrieve relevant historical memories about THIS customer.
 
     Use this BEFORE asking the customer for information they may have
     given previously: preferences, complaints, past order patterns,
-    delivery instructions, etc. The result is a short list of past
-    facts ranked by combined semantic relevance + recency.
+    delivery instructions, etc. The injected ``<recent_events>`` block
+    only carries the most-recent few; this tool fishes deeper.
 
     Args:
         query: A natural-language question or topic in Chinese.
@@ -141,7 +149,6 @@ async def recall_memory(
     channel = cfg.get("channel")
     channel_user_id = cfg.get("channel_user_id")
     if not (pool and embedder and channel and channel_user_id):
-        # Tool was invoked outside a properly-configured graph turn.
         return "（无法访问历史记忆：缺少运行上下文）"
 
     bounded_k = max(1, min(int(top_k), MAX_TOP_K))
@@ -156,4 +163,4 @@ async def recall_memory(
             half_life_days=cfg.get("recall_half_life_days", DEFAULT_HALF_LIFE_DAYS),
         )
         _log.info("tools.recall_memory.recalled", count=len(rows), query_len=len(query))
-        return _format_episodes(rows)
+        return _format_recall(rows)

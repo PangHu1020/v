@@ -242,10 +242,12 @@ def make_bus_handler(
                     channel_user_id=msg.channel_user_id,
                     cache_ttl_seconds=cache_ttl_seconds,
                     recent_events_limit=recent_events_to_inject,
+                    session_id=session_id,
                 )
                 session_start_ms = int((time.perf_counter() - t0) * 1000)
                 profile = bootstrap["profile"]
                 recent_events = bootstrap["recent_events"]
+                working_memory = bootstrap["working_memory"]
 
                 input_state: CustomerServiceState = {
                     "messages": [HumanMessage(content=msg.text)],
@@ -254,6 +256,7 @@ def make_bus_handler(
                     "channel_user_id": msg.channel_user_id,
                     "user_profile": profile,
                     "recent_events": recent_events,
+                    "working_memory": working_memory,
                     "interrupt_payload": None,
                 }
                 config = {

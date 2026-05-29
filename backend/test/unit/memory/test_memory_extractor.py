@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
@@ -12,12 +11,9 @@ import fakeredis.aioredis
 import pytest
 from langchain_core.messages import AIMessage
 
-from backend.v.memory.memory_extractor import (
-    Episode,
-    ExtractionOutput,
-    extract_session_memory,
-)
-from backend.v.memory.session_memory import write_session_memory
+from backend.v.memory.memory_extractor import promote_to_long_term
+from backend.v.memory.types import ExtractionResult, MemoryEntry
+from backend.v.memory.working import append_working_memory
 from backend.v.models.llm_caller import LLMResult
 
 
@@ -56,11 +52,16 @@ def _fake_pool(
     async def _acquire():
         yield conn
 
+    @asynccontextmanager
+    async def _transaction():
+        yield None
+
+    conn.transaction = _transaction
     pool.acquire = _acquire
     return pool, log
 
 
-def _llm_returning(extracted: ExtractionOutput) -> MagicMock:
+def _llm_returning(extracted: ExtractionResult) -> MagicMock:
     caller = MagicMock()
     caller.chat = AsyncMock(
         return_value=LLMResult(
@@ -80,7 +81,13 @@ def _embedder_returning(vectors: list[list[float]]) -> MagicMock:
     return embedder
 
 
-class TestExtractSessionMemory:
+async def _seed_working(redis_client, session_id: str, entries: list[MemoryEntry]) -> None:
+    await append_working_memory(
+        redis_client, session_id=session_id, entries=entries, ttl_seconds=1800
+    )
+
+
+class TestPromoteToLongTerm:
     async def test_no_session_row_returns_none(
         self, redis_client: fakeredis.aioredis.FakeRedis
     ) -> None:
@@ -91,46 +98,59 @@ class TestExtractSessionMemory:
             "llm_caller": MagicMock(),
             "embedder": MagicMock(),
         }
-        result = await extract_session_memory(ctx, session_id="ghost")
+        result = await promote_to_long_term(ctx, session_id="ghost")
         assert result is None
-        assert len(log) == 1  # only the session identity lookup
+        assert len(log) == 1  # only the session-identity lookup ran
 
-    async def test_no_session_memory_returns_none(
+    async def test_no_working_memory_returns_none(
         self, redis_client: fakeredis.aioredis.FakeRedis
     ) -> None:
         pool, _ = _fake_pool(
             session_row={"channel": "wecom", "channel_user_id": "u"},
         )
-        # No session_memory written to Redis → None
         ctx = {
             "pool": pool,
             "redis": redis_client,
             "llm_caller": MagicMock(),
             "embedder": MagicMock(),
         }
-        result = await extract_session_memory(ctx, session_id="s")
+        result = await promote_to_long_term(ctx, session_id="s")
         assert result is None
 
-    async def test_full_round_trip_writes_profile_and_episodes(
+    async def test_full_round_trip_writes_profile_and_events(
         self, redis_client: fakeredis.aioredis.FakeRedis
     ) -> None:
         pool, log = _fake_pool(
             session_row={"channel": "wecom", "channel_user_id": "ext-1"},
             profile_row={"profile": {"member_level": "黄金"}},
         )
-        # Seed Redis session_memory
-        await write_session_memory(
+        await _seed_working(
             redis_client,
-            session_id="s",
-            preferences={"preferred_courier": "顺丰"},
-            observations=["客户对物流速度敏感"],
-            ttl_seconds=1800,
+            "s",
+            [
+                MemoryEntry(
+                    content="客户偏好顺丰快递", importance=0.7, keywords=["快递"], kind="preference"
+                ),
+            ],
         )
-        extracted = ExtractionOutput(
-            profile={"member_level": "黄金", "preferred_courier": "顺丰"},
-            episodes=[
-                Episode(content="客户偏好顺丰快递", importance=4, tags=["preference"]),
-                Episode(content="客户对物流速度敏感", importance=3, tags=["sensitivity"]),
+        extracted = ExtractionResult(
+            profile_updates={
+                "preferred_salutation": "先生",
+                "extras": {"preferred_courier": "顺丰"},
+            },
+            event_memories=[
+                MemoryEntry(
+                    content="咨询过 SKU-A 的尺码",
+                    importance=0.5,
+                    keywords=["商品"],
+                    kind="event",
+                ),
+                MemoryEntry(
+                    content="投诉过物流延误",
+                    importance=0.8,
+                    keywords=["物流"],
+                    kind="event",
+                ),
             ],
         )
         embedder = _embedder_returning([[0.1] * 1024, [0.2] * 1024])
@@ -140,42 +160,40 @@ class TestExtractSessionMemory:
             "llm_caller": _llm_returning(extracted),
             "embedder": embedder,
         }
-        result = await extract_session_memory(ctx, session_id="s")
-        assert result == {"profile_updated": 1, "episodes_inserted": 2}
+        result = await promote_to_long_term(ctx, session_id="s")
+        assert result == {"profile_updated": 1, "events_inserted": 2}
 
         sqls = [s for s, _ in log]
         assert any("INSERT INTO agent.user_profile" in s for s in sqls)
-        assert sum("INSERT INTO agent.memory_episodes" in s for s in sqls) == 2
+        assert sum("INSERT INTO agent.event_memory" in s for s in sqls) == 2
 
-        # Redis record deleted after successful promotion.
-        assert await redis_client.get("session_memory:s") is None
+        # Working-memory list deleted after successful promotion.
+        assert await redis_client.exists("working_memory:s") == 0
 
-    async def test_empty_profile_skips_upsert(
+    async def test_empty_profile_updates_skips_upsert(
         self, redis_client: fakeredis.aioredis.FakeRedis
     ) -> None:
         pool, log = _fake_pool(
             session_row={"channel": "wecom", "channel_user_id": "u"},
             profile_row={"profile": {"member_level": "黄金"}},
         )
-        await write_session_memory(
+        await _seed_working(
             redis_client,
-            session_id="s",
-            preferences={},
-            observations=["x"],
-            ttl_seconds=1800,
+            "s",
+            [MemoryEntry(content="x", importance=0.1, keywords=[], kind="observation")],
         )
-        extracted = ExtractionOutput(profile={}, episodes=[])
+        extracted = ExtractionResult(profile_updates={}, event_memories=[])
         ctx = {
             "pool": pool,
             "redis": redis_client,
             "llm_caller": _llm_returning(extracted),
             "embedder": MagicMock(),
         }
-        result = await extract_session_memory(ctx, session_id="s")
-        assert result == {"profile_updated": 0, "episodes_inserted": 0}
+        result = await promote_to_long_term(ctx, session_id="s")
+        assert result == {"profile_updated": 0, "events_inserted": 0}
         sqls = [s for s, _ in log]
         assert not any("INSERT INTO agent.user_profile" in s for s in sqls)
-        assert not any("INSERT INTO agent.memory_episodes" in s for s in sqls)
+        assert not any("INSERT INTO agent.event_memory" in s for s in sqls)
 
     async def test_llm_failure_returns_none(
         self, redis_client: fakeredis.aioredis.FakeRedis
@@ -183,12 +201,10 @@ class TestExtractSessionMemory:
         pool, _ = _fake_pool(
             session_row={"channel": "wecom", "channel_user_id": "u"},
         )
-        await write_session_memory(
+        await _seed_working(
             redis_client,
-            session_id="s",
-            preferences={"x": "y"},
-            observations=[],
-            ttl_seconds=1800,
+            "s",
+            [MemoryEntry(content="x", importance=0.1, keywords=[], kind="observation")],
         )
         caller = MagicMock()
         caller.chat = AsyncMock(side_effect=RuntimeError("api down"))
@@ -198,7 +214,7 @@ class TestExtractSessionMemory:
             "llm_caller": caller,
             "embedder": MagicMock(),
         }
-        result = await extract_session_memory(ctx, session_id="s")
+        result = await promote_to_long_term(ctx, session_id="s")
         assert result is None
 
     async def test_corrupt_llm_output_returns_none(
@@ -207,12 +223,10 @@ class TestExtractSessionMemory:
         pool, _ = _fake_pool(
             session_row={"channel": "wecom", "channel_user_id": "u"},
         )
-        await write_session_memory(
+        await _seed_working(
             redis_client,
-            session_id="s",
-            preferences={"x": "y"},
-            observations=[],
-            ttl_seconds=1800,
+            "s",
+            [MemoryEntry(content="x", importance=0.1, keywords=[], kind="observation")],
         )
         caller = MagicMock()
         caller.chat = AsyncMock(
@@ -230,21 +244,25 @@ class TestExtractSessionMemory:
             "llm_caller": caller,
             "embedder": MagicMock(),
         }
-        result = await extract_session_memory(ctx, session_id="s")
+        result = await promote_to_long_term(ctx, session_id="s")
         assert result is None
 
 
-class TestEpisodeSchema:
-    def test_validation_clamps_importance(self) -> None:
+class TestMemoryEntrySchema:
+    def test_importance_clamps(self) -> None:
         with pytest.raises(Exception):  # noqa: B017
-            Episode(content="x", importance=10)
+            MemoryEntry(content="x", importance=2.0, keywords=[], kind="event")
 
-    def test_default_tags_empty(self) -> None:
-        e = Episode(content="只是一个事实")
-        assert e.tags == []
-        assert e.importance == 3
+    def test_kind_must_be_known(self) -> None:
+        with pytest.raises(Exception):  # noqa: B017
+            MemoryEntry(content="x", importance=0.5, keywords=[], kind="bogus")  # type: ignore[arg-type]
 
     def test_round_trip(self) -> None:
-        e = Episode(content="客户偏好夜间收货", importance=5, tags=["preference", "logistics"])
-        rehydrated = Episode.model_validate(json.loads(e.model_dump_json()))
+        e = MemoryEntry(
+            content="客户偏好夜间收货",
+            importance=0.8,
+            keywords=["快递", "时间"],
+            kind="preference",
+        )
+        rehydrated = MemoryEntry.model_validate_json(e.model_dump_json())
         assert rehydrated == e

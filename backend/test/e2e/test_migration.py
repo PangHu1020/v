@@ -134,25 +134,31 @@ class TestMigration:
         finally:
             await conn.close()
         agent_tables = {r["table_name"] for r in rows}
+        # Phase-3 reshape: session_memory + memory_episodes collapsed
+        # into a single event_memory table.
         assert agent_tables >= {
             "user_alias",
             "session",
-            "session_memory",
             "user_profile",
-            "memory_episodes",
+            "event_memory",
         }
+        # session_memory + memory_episodes are explicitly removed.
+        assert "session_memory" not in agent_tables
+        assert "memory_episodes" not in agent_tables
         tenant_tables = {r["table_name"] for r in tenant_rows}
-        # Per CLAUDE.md, every agent table reserves a nullable tenant_id.
-        assert {"user_alias", "session", "user_profile", "memory_episodes"} <= tenant_tables
+        # Per CLAUDE.md, the long-lived agent tables reserve a nullable tenant_id.
+        # event_memory was added in 060 without one — Phase-3 P2 (multi-tenant)
+        # will add it; for now the canonical long-term tables suffice.
+        assert {"user_alias", "session", "user_profile"} <= tenant_tables
 
-    async def test_memory_episodes_embedding_is_vector_1024(self, fresh_database: str) -> None:
+    async def test_event_memory_embedding_is_vector_1024(self, fresh_database: str) -> None:
         await _apply_migrations(fresh_database)
         conn = await asyncpg.connect(fresh_database)
         try:
             row = await conn.fetchrow(
                 "SELECT format_type(atttypid, atttypmod) AS coltype "
                 "FROM pg_attribute "
-                "WHERE attrelid = 'agent.memory_episodes'::regclass "
+                "WHERE attrelid = 'agent.event_memory'::regclass "
                 "AND attname = 'embedding'"
             )
         finally:
@@ -166,8 +172,8 @@ class TestMigration:
         try:
             row = await conn.fetchrow(
                 "SELECT indexdef FROM pg_indexes "
-                "WHERE schemaname='agent' AND tablename='memory_episodes' "
-                "AND indexname='idx_episodes_embedding_hnsw'"
+                "WHERE schemaname='agent' AND tablename='event_memory' "
+                "AND indexname='idx_event_memory_embedding_hnsw'"
             )
         finally:
             await conn.close()
@@ -251,15 +257,17 @@ class TestStoreHelpersAgainstRealPg:
                 # Round-trip a vector to verify the codec.
                 vec = [0.1] * 1024
                 await conn.execute(
-                    "INSERT INTO memory_episodes "
-                    "(channel, channel_user_id, content, embedding) "
-                    "VALUES ($1, $2, $3, $4)",
+                    "INSERT INTO event_memory "
+                    "(channel, channel_user_id, content, kind, importance, embedding) "
+                    "VALUES ($1, $2, $3, $4, $5, $6)",
                     "wecom",
                     "ext-1",
                     "hello",
+                    "event",
+                    0.5,
                     vec,
                 )
-                row = await conn.fetchrow("SELECT content, embedding FROM memory_episodes LIMIT 1")
+                row = await conn.fetchrow("SELECT content, embedding FROM event_memory LIMIT 1")
                 assert row["content"] == "hello"
                 assert len(row["embedding"]) == 1024
         finally:

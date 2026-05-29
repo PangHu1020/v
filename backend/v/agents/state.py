@@ -13,6 +13,8 @@ from typing import Annotated, Any, TypedDict
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
+from backend.v.memory.types import MemoryEntry
+
 
 class CustomerServiceState(TypedDict, total=False):
     """LangGraph state passed between nodes.
@@ -26,9 +28,12 @@ class CustomerServiceState(TypedDict, total=False):
         channel_user_id: External per-channel user id.
         user_profile: Long-term ``user_profile`` row injected at session start.
             ``None`` when the user has no stored profile yet.
-        recent_events: List of medium-term event-memory dicts loaded at
-            session start (newest first; rendered into the system prompt
-            by ``enter_node`` for cross-session continuity).
+        recent_events: List of medium-term ``agent.event_memory`` dicts loaded
+            at session start (newest first; rendered into ``<recent_events>``
+            by ``enter_node``).
+        working_memory: List of :class:`MemoryEntry` from this session's Redis
+            working memory (rendered into ``<session_memory>``). Empty list
+            on the first turn before any consolidation has fired.
         interrupt_payload: Reserved for ``transfer_to_human`` handoff metadata.
     """
 
@@ -38,6 +43,7 @@ class CustomerServiceState(TypedDict, total=False):
     channel_user_id: str
     user_profile: dict[str, Any] | None
     recent_events: list[dict[str, Any]]
+    working_memory: list[MemoryEntry]
     interrupt_payload: dict[str, Any] | None
     # Phase-3 Group D: tool safety guards
     tool_fingerprints: list[str]

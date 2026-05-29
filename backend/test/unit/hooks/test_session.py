@@ -33,7 +33,7 @@ def _fake_pool(
         return None
 
     async def _fetch(sql: str, *args):
-        if "FROM agent.session_memory" in sql:
+        if "FROM agent.event_memory" in sql:
             return event_rows or []
         return []
 
@@ -141,8 +141,11 @@ class TestOnSessionStartRecentEvents:
             {"profile": {}},
             event_rows=[
                 {
-                    "summary": "上次咨询了订单",
-                    "metadata": {},
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "content": "上次咨询了订单",
+                    "kind": "event",
+                    "importance": 0.5,
+                    "keywords": ["订单"],
                     "created_at": datetime.now(),
                 }
             ],
@@ -165,8 +168,11 @@ class TestOnSessionStartRecentEvents:
 
         rows = [
             {
-                "summary": f"event-{i}",
-                "metadata": {"intents": ["x"]},
+                "id": f"00000000-0000-0000-0000-00000000000{i}",
+                "content": f"event-{i}",
+                "kind": "event",
+                "importance": 0.5,
+                "keywords": ["x"],
                 "created_at": datetime.now() - timedelta(days=i),
             }
             for i in range(3)
@@ -181,7 +187,7 @@ class TestOnSessionStartRecentEvents:
             recent_events_limit=3,
         )
         assert len(result["recent_events"]) == 3
-        assert result["recent_events"][0]["summary"] == "event-0"
+        assert result["recent_events"][0]["content"] == "event-0"
 
     async def test_no_events_returns_empty_list(
         self,

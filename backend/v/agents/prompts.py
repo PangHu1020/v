@@ -20,29 +20,18 @@ Style conventions (apply to every prompt in this file):
 
 from __future__ import annotations
 
-from typing import Any
-
 # ── Main customer-service agent ───────────────────────────────────────────────
 
 
-def build_main_system_prompt(profile: dict[str, Any] | None, channel: str) -> str:
+def build_main_system_prompt(channel: str) -> str:
     """Render the per-turn system prompt for the main agent.
 
-    Profile sub-tags are nested only when their values are truthy so the
-    model isn't confused by a wall of empty placeholders.
+    The customer profile, recent events, and active session memory are
+    appended by ``enter_node`` as separate ``<customer_profile>`` /
+    ``<recent_events>`` / ``<session_memory>`` envelopes. Keeping them
+    out of this function makes the static portion of the prompt easy
+    to diff and cheap to A/B.
     """
-    profile_block = ""
-    if profile:
-        bits: list[str] = []
-        if name := profile.get("customer_name"):
-            bits.append(f"  <name>{name}</name>")
-        if level := profile.get("member_level"):
-            bits.append(f"  <member_level>{level}</member_level>")
-        if pref := profile.get("preferred_language"):
-            bits.append(f"  <preferred_language>{pref}</preferred_language>")
-        if bits:
-            profile_block = "\n<customer_profile>\n" + "\n".join(bits) + "\n</customer_profile>"
-
     channel_text = channel or "未知渠道"
 
     return f"""<role>
@@ -60,14 +49,14 @@ def build_main_system_prompt(profile: dict[str, Any] | None, channel: str) -> st
 - 工具集（按用途选择，不要兜底全调）：
   · calculator —— 数值计算（折扣、运费、积分换算）。
   · search —— 公开网络检索（节假日、第三方政策）。
-  · recall_memory —— 按语义召回该客户的历史会话片段。
+  · recall_memory —— 按语义召回该客户更早的事件记忆（30 天 TTL 之外或被注入截断时使用）。
   · subagent —— 委托 NL2SQL 子任务查询业务数据库（订单状态、库存等）。
   · transfer_to_human —— 触发人工接管，调用后对话挂起，所有后续消息由真人处理。
 </capabilities>
 
 <workflow>
 1. 先判断本句意图属于哪一类（咨询 / 投诉 / 退款 / 物流 / 闲聊）。
-2. 需要"具体事实"（订单号、单号、库存、价格、时间）时，\
+2. 需要"具体事���"（订单号、单号、库存、价格、时间）时，\
 必须先调工具拿到数据再回复，不要凭借推测。
 3. 工具返回后，把结果用客户能听懂的话复述，不要把 JSON / SQL 字段名直接抛给客户。
 4. 满足任一条件就调用 transfer_to_human：客户明确要人工 / 涉及金额纠纷 /\
@@ -78,8 +67,8 @@ def build_main_system_prompt(profile: dict[str, Any] | None, channel: str) -> st
 - 简短、口语化、不堆砌套话。一次回复 1-3 句为宜，复杂步骤可用编号列表。
 - 涉及具体业务时给出明确步骤而不是泛泛而谈。
 - 不暴露内部实现（不要说"我调用了 search 工具"、"根据 RAG 检索"）。
-- 默认中文；客户档案 preferred_language 显式标注其他语言时按其偏好。
-- 称呼依据客户档案 name；无档案时使用"您"。
+- 默认中文；customer_profile.preferred_language 显式标注其他语言时按其偏好。
+- 称呼依据 customer_profile.customer_name + preferred_salutation；无档案时使用"您"。
 </style>
 
 <constraints>
@@ -87,9 +76,12 @@ def build_main_system_prompt(profile: dict[str, Any] | None, channel: str) -> st
 - 不要承诺补偿、折扣、改单、赔付——这些一律转人工处理。
 - 工具结果与客户陈述冲突时以工具结果为准，措辞礼貌\
 （"我这边查到的是…，您看是不是订单号有出入？"）。
-- 不要在回复中复述 <recent_context> / <session_memory> / <sops> 里的原文，\
+- 不要在回复中复述 <customer_profile> / <recent_events> / <session_memory> / <sops> 里的原文，\
 仅作为参考语境使用。
-</constraints>{profile_block}"""
+- 同一主题在多个记忆层（profile / recent_events / session_memory）有冲突陈述时，\
+**以更靠后的层为准**——session_memory 覆盖 recent_events，recent_events 覆盖 customer_profile。\
+这是"就近原则"的兜底实现，不要试图调和。
+</constraints>"""
 
 
 # ── Intent classifier (cheap LLM, runs before main agent) ─────────────────────

@@ -1,17 +1,17 @@
-"""User-level memory layers (Phase-2 P3 + Phase-3 Group C).
+"""User-level memory layers (Phase-3 Group H reshape).
 
-Three temperature tiers:
+Three temperature tiers, all sentence-shaped via :class:`MemoryEntry`:
 
-1. **Session memory (短期)** — :mod:`session_memory`. Redis hash of the
-   current session's preferences + observations, TTL = working memory
-   TTL (1800s). Disappears with the session.
-2. **Event memory (中期)** — :mod:`event_memory` (read API) +
-   ``agent.session_memory`` table (write happens in
-   :mod:`backend.v.cron.tasks.consolidate_session`). One row per
-   completed session; 30-day expiry.
-3. **User memory (长期)** — :mod:`long_term` (read) +
-   :mod:`memory_extractor` (LLM-driven write). ``agent.user_profile``
-   JSONB and ``agent.memory_episodes`` (vectorized). No expiry.
+1. **Working memory (短期)** — :mod:`working`. Redis list of
+   :class:`MemoryEntry` keyed by ``session_id``. TTL = working memory
+   window. Disappears with the session.
+2. **Event memory (中期)** — :mod:`event_memory`. PG ``agent.event_memory``
+   row-per-entry table, 30-day TTL, ``vector(1024)`` column for
+   semantic recall. Read by ``on_session_start`` (newest N) and the
+   :func:`backend.v.tools.recall_memory` tool (vector ANN).
+3. **User profile (长期)** — :mod:`long_term` (read) +
+   :mod:`memory_extractor` (LLM-driven write into ``agent.user_profile``
+   JSONB). Schema described by :class:`UserProfile`.
 
 The LangGraph checkpointer (working-memory state, hot/cold migration)
 lives separately in :mod:`backend.v.agents.checkpoints` — it is part
@@ -19,36 +19,47 @@ of the agent runtime, not user memory.
 """
 
 from backend.v.memory.event_memory import (
+    insert_event_memories,
     read_recent_event_memories,
     render_recent_events_for_prompt,
 )
 from backend.v.memory.long_term import read_user_profile
 from backend.v.memory.memory_extractor import (
-    Episode,
-    ExtractionOutput,
     extract_session_memory,
+    promote_to_long_term,
 )
-from backend.v.memory.session_memory import (
-    delete_session_memory,
-    read_session_memory,
-    write_session_memory,
+from backend.v.memory.prompts import (
+    render_session_memory_for_prompt,
 )
-from backend.v.memory.session_memory import (
-    render_for_prompt as render_session_memory_for_prompt,
+from backend.v.memory.types import (
+    ExtractionResult,
+    MemoryEntry,
+    MemoryKind,
+    UserProfile,
 )
-from backend.v.memory.working import cache_user_profile, get_cached_user_profile
+from backend.v.memory.working import (
+    append_working_memory,
+    cache_user_profile,
+    delete_working_memory,
+    get_cached_user_profile,
+    read_working_memory,
+)
 
 __all__ = [
-    "Episode",
-    "ExtractionOutput",
+    "ExtractionResult",
+    "MemoryEntry",
+    "MemoryKind",
+    "UserProfile",
+    "append_working_memory",
     "cache_user_profile",
-    "delete_session_memory",
+    "delete_working_memory",
     "extract_session_memory",
     "get_cached_user_profile",
+    "insert_event_memories",
+    "promote_to_long_term",
     "read_recent_event_memories",
-    "read_session_memory",
     "read_user_profile",
+    "read_working_memory",
     "render_recent_events_for_prompt",
     "render_session_memory_for_prompt",
-    "write_session_memory",
 ]

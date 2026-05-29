@@ -1,27 +1,21 @@
-"""Session consolidation: short-term + medium-term memory writes.
+"""Session consolidation: dual-write into working + event memory.
 
-Phase-3 reshape of Phase-2's consolidator. One LLM call still does the
-heavy lifting; what changes is the **output shape** (now feeds two
-layers) and the **trigger semantics** (mid-session compression also
-calls in here).
+Phase-3 Group H reshape. One LLM call still does the heavy lifting,
+but the output shape is now :class:`backend.v.memory.types.ExtractionResult`
+(a unified ``profile_updates`` + ``working_memories`` + ``event_memories``)
+and the writes split:
 
-The 三层温度梯度 design:
+- ``working_memories`` → Redis list via
+  :func:`backend.v.memory.working.append_working_memory`.
+- ``event_memories``   → ``agent.event_memory`` rows via
+  :func:`backend.v.memory.event_memory.insert_event_memories` (each
+  embedded at write time).
+- ``profile_updates``  → IGNORED here; the long-term profile is owned
+  by :mod:`backend.v.memory.memory_extractor.promote_to_long_term`,
+  which runs only at session end.
 
-- 会话记忆（短期，Redis） — :func:`backend.v.memory.session_memory.write_session_memory`.
-  Holds preferences + observations the LLM extracted from this session;
-  consumed at session-end promotion (固化) and by the mid-session
-  compression node when it re-injects personalization context.
-- 事件记忆（中期，PG，30 天）— ``agent.session_memory`` row. Holds
-  narrative + intents + key_facts + sentiment + unresolved; consumed at
-  next-session ``on_session_start`` injection.
-
-The session-end promotion to long-term ``user_profile`` is owned by
-:mod:`backend.v.memory.memory_extractor` and runs only when the session
-truly closes (not on every compression).
-
-Returns the new ``agent.session_memory.id`` so callers (e.g., a
-``compression_node``) can fetch the row back if they need the rendered
-narrative.
+The session row's ``status`` is flipped to ``'consolidated'`` so a
+re-run is a clean no-op.
 """
 
 from __future__ import annotations
@@ -31,73 +25,25 @@ from typing import Any
 
 import asyncpg
 import redis.asyncio as redis_async
+from langchain_core.embeddings import Embeddings
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from pydantic import BaseModel, Field
 
 from backend.v.agents.checkpoints.redis import RedisCheckpointer
-from backend.v.cron.tasks.prompts import SESSION_SUMMARIZER_SYSTEM_PROMPT
-from backend.v.memory.session_memory import write_session_memory
+from backend.v.cron.tasks.prompts import SESSION_CONSOLIDATION_SYSTEM_PROMPT
+from backend.v.memory.event_memory import (
+    DEFAULT_EVENT_TTL_DAYS,
+    insert_event_memories,
+)
+from backend.v.memory.types import ExtractionResult
+from backend.v.memory.working import append_working_memory
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.utils.logging import bind_request, get_logger
 
 _log = get_logger("cron.consolidate_session")
 
-DEFAULT_EVENT_TTL_DAYS = 30
-
-
-class SessionExtraction(BaseModel):
-    """Structured output of the consolidation prompt.
-
-    Two halves: the medium-term ``事件记忆`` columns (narrative …
-    unresolved) and the short-term ``会话记忆`` columns (preferences,
-    observations). The session-end promotion later decides which of the
-    short-term preferences cross over into the long-term ``user_profile``.
-    """
-
-    # 事件记忆 (medium-term, PG agent.session_memory)
-    narrative: str = Field(description="One paragraph summary of the session, in Chinese.")
-    intents: list[str] = Field(
-        default_factory=list,
-        description="Top-level intents the customer expressed (e.g., 退款, 物流查询).",
-    )
-    key_facts: list[str] = Field(
-        default_factory=list,
-        description="Concrete facts worth remembering (订单号, 偏好, 投诉点).",
-    )
-    sentiment: str = Field(
-        default="neutral",
-        description="Customer's overall sentiment: positive / neutral / negative.",
-    )
-    unresolved: list[str] = Field(
-        default_factory=list,
-        description="Any items left unresolved at the end of the session.",
-    )
-
-    # 会话记忆 (short-term, Redis session_memory)
-    preferences: dict[str, str] = Field(
-        default_factory=dict,
-        description=(
-            "Actionable preferences the agent should respect for the rest "
-            'of THIS session. Examples: {"preferred_courier": "顺丰", '
-            '"language": "普通话"}. Only include items the customer '
-            "stated or strongly implied this session."
-        ),
-    )
-    observations: list[str] = Field(
-        default_factory=list,
-        description=(
-            "Free-form short observations about the current state — tone, "
-            "urgency, special context. Used by the compression node to "
-            "preserve agent persona across compressed turns."
-        ),
-    )
-
-
-_SUMMARIZE_SYSTEM_PROMPT = SESSION_SUMMARIZER_SYSTEM_PROMPT
-
 
 def _format_history(messages: list[BaseMessage]) -> str:
-    """Render the messages list as a plain-text transcript for the summarizer."""
+    """Render the messages list as a plain-text transcript for the consolidator."""
     parts: list[str] = []
     for m in messages:
         if isinstance(m, SystemMessage):
@@ -123,13 +69,14 @@ def _format_history(messages: list[BaseMessage]) -> str:
 async def _run_llm_extraction(
     llm_caller: LLMCaller,
     transcript: str,
-) -> SessionExtraction | None:
+) -> ExtractionResult | None:
+    """Run the LLM and parse the ExtractionResult shape. Returns ``None`` on failure."""
     prompt: list[BaseMessage] = [
-        SystemMessage(content=_SUMMARIZE_SYSTEM_PROMPT),
+        SystemMessage(content=SESSION_CONSOLIDATION_SYSTEM_PROMPT),
         HumanMessage(content=f"<transcript>\n{transcript}\n</transcript>"),
     ]
     try:
-        result = await llm_caller.chat("summary", prompt, structured=SessionExtraction)
+        result = await llm_caller.chat("summary", prompt, structured=ExtractionResult)
     except Exception as exc:
         _log.error("cron.consolidate.llm_failed", error=type(exc).__name__)
         return None
@@ -137,7 +84,7 @@ async def _run_llm_extraction(
         payload = (
             json.loads(result.message.content) if isinstance(result.message.content, str) else {}
         )
-        return SessionExtraction.model_validate(payload)
+        return ExtractionResult.model_validate(payload)
     except Exception as exc:
         _log.error("cron.consolidate.parse_failed", error=type(exc).__name__)
         return None
@@ -149,24 +96,26 @@ async def consolidate_session(
     session_id: str,
     channel: str | None = None,
     channel_user_id: str | None = None,
-) -> str | None:
+) -> dict[str, int] | None:
     """Run the dual-write consolidation.
 
     1. Read the thread's messages from the Redis checkpointer.
-    2. Run one LLM call producing :class:`SessionExtraction`.
-    3. Write the medium-term half to ``agent.session_memory`` with a
-       30-day ``expires_at``.
-    4. Write the short-term half to Redis via
-       :func:`write_session_memory`.
+    2. Run one LLM call producing :class:`ExtractionResult`.
+    3. Append ``working_memories`` to the session's Redis working memory.
+    4. Embed + INSERT each ``event_memories`` entry into ``agent.event_memory``
+       with a 30-day expires_at.
     5. Mark the session row ``status = 'consolidated'``.
 
-    Returns the inserted ``agent.session_memory.id`` on success or
-    ``None`` if there's nothing to consolidate. Tolerant of LLM / parse
-    failures (logs + returns None).
+    ``profile_updates`` are deliberately ignored here — they're produced
+    by the session-end promotion path (``promote_to_long_term``).
+
+    Returns ``{"working_inserted": int, "events_inserted": int}`` on
+    success or ``None`` if there's nothing to consolidate.
     """
     pool: asyncpg.Pool = ctx["pool"]
     redis: redis_async.Redis = ctx["redis"]
     llm_caller: LLMCaller = ctx["llm_caller"]
+    embedder: Embeddings = ctx["embedder"]
     ttl_seconds: int = ctx.get("ttl_seconds", 1800)
     event_ttl_days: int = ctx.get("event_ttl_days", DEFAULT_EVENT_TTL_DAYS)
 
@@ -191,45 +140,53 @@ async def consolidate_session(
         if extraction is None:
             return None
 
-        token_count = len(transcript)
+        # Resolve identity for event_memory rows when the caller didn't
+        # supply it. The event_memory table is partitioned by
+        # (channel, channel_user_id), so we need it to be correct.
+        if channel is None or channel_user_id is None:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT channel, channel_user_id FROM agent.session WHERE session_id = $1",
+                    session_id,
+                )
+            if row is None:
+                _log.warning("cron.consolidate.no_identity")
+                return None
+            channel = channel or row["channel"]
+            channel_user_id = channel_user_id or row["channel_user_id"]
+
+        # Working-memory writes are cheap (Redis RPUSH); event-memory
+        # writes go through the embedder for each row.
+        await append_working_memory(
+            redis,
+            session_id=session_id,
+            entries=extraction.working_memories,
+            ttl_seconds=ttl_seconds,
+        )
+        events_inserted = await insert_event_memories(
+            pool,
+            channel=channel,
+            channel_user_id=channel_user_id,
+            session_id=session_id,
+            entries=extraction.event_memories,
+            embedder=embedder,
+            ttl_days=event_ttl_days,
+        )
+
         async with pool.acquire() as conn:
-            row_id = await conn.fetchval(
-                "INSERT INTO agent.session_memory "
-                "(session_id, summary, token_count, metadata, expires_at) "
-                "VALUES ($1, $2, $3, $4, now() + ($5 || ' days')::interval) "
-                "RETURNING id",
-                session_id,
-                extraction.narrative,
-                token_count,
-                {
-                    "intents": extraction.intents,
-                    "key_facts": extraction.key_facts,
-                    "sentiment": extraction.sentiment,
-                    "unresolved": extraction.unresolved,
-                },
-                str(event_ttl_days),
-            )
             await conn.execute(
                 "UPDATE agent.session SET status = 'consolidated', "
                 "last_activity_at = now() WHERE session_id = $1",
                 session_id,
             )
 
-        await write_session_memory(
-            redis,
-            session_id=session_id,
-            preferences=extraction.preferences,
-            observations=extraction.observations,
-            ttl_seconds=ttl_seconds,
-        )
-
         _log.info(
             "cron.consolidate.persisted",
-            row_id=str(row_id),
-            intents=len(extraction.intents),
-            key_facts=len(extraction.key_facts),
-            preferences=len(extraction.preferences),
-            observations=len(extraction.observations),
+            working_inserted=len(extraction.working_memories),
+            events_inserted=events_inserted,
             event_ttl_days=event_ttl_days,
         )
-        return str(row_id)
+        return {
+            "working_inserted": len(extraction.working_memories),
+            "events_inserted": events_inserted,
+        }

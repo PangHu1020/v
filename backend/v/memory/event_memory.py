@@ -1,28 +1,79 @@
-"""Medium-term event memory (Phase-3 Group C, layer 2).
+"""Event memory: medium-term persistent sentence store (PG ``agent.event_memory``).
 
-Reads against ``agent.session_memory`` filtered by the ``expires_at``
-column added in scripts/sql/050_session_memory_ttl.sql. Each session-end
-consolidation writes one row; rows live ``MEMORY_EVENT_TTL_DAYS`` days
-(30 by default).
+Replaces the Phase-2 multi-field ``agent.session_memory`` AND the
+Phase-2 ``agent.memory_episodes``. One row = one
+:class:`backend.v.memory.types.MemoryEntry` + an embedding column.
 
-Two consumers:
+Two read paths consume this table:
 
-- ``on_session_start`` injects the most-recent few entries into the
-  system prompt for cross-session continuity ("上次我们聊到...")
-- The mid-session compression node renders a summary line that replaces
-  the compressed messages.
+- ``on_session_start`` injects the most-recent N rows for cross-session
+  continuity (no embedding needed).
+- The ``recall_memory`` tool runs vector ANN against the same rows
+  (lives in :mod:`backend.v.tools.recall_memory`).
 
-Writes happen in :mod:`backend.v.cron.tasks.consolidate_session`. This
-module is read-only on purpose: keeping write SQL co-located with the
-LLM-driven extraction it serves.
+The single write path is :func:`insert_event_memories`, called by the
+consolidation flow with vectors already computed.
 """
 
 from __future__ import annotations
 
-import json
+from datetime import datetime
 from typing import Any
 
 import asyncpg
+from langchain_core.embeddings import Embeddings
+
+from backend.v.memory.types import MemoryEntry
+
+DEFAULT_EVENT_TTL_DAYS = 30
+
+
+async def insert_event_memories(
+    pool: asyncpg.Pool,
+    *,
+    channel: str,
+    channel_user_id: str,
+    session_id: str | None,
+    entries: list[MemoryEntry],
+    embedder: Embeddings,
+    ttl_days: int = DEFAULT_EVENT_TTL_DAYS,
+) -> int:
+    """Embed each entry's content and INSERT one row per item.
+
+    Returns the count actually inserted. Empty entries → no embedding
+    round-trip, returns 0.
+    """
+    if not entries:
+        return 0
+    contents = [e.content for e in entries]
+    vectors = await embedder.aembed_documents(contents)
+
+    inserted = 0
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            for entry, vec in zip(entries, vectors, strict=True):
+                await conn.execute(
+                    """
+                    INSERT INTO agent.event_memory
+                        (channel, channel_user_id, session_id,
+                         content, kind, importance, keywords,
+                         embedding, created_at, expires_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz,
+                            $9::timestamptz + ($10 || ' days')::interval)
+                    """,
+                    channel,
+                    channel_user_id,
+                    session_id,
+                    entry.content,
+                    entry.kind,
+                    float(entry.importance),
+                    entry.keywords,
+                    vec,
+                    entry.created_at,
+                    str(ttl_days),
+                )
+                inserted += 1
+    return inserted
 
 
 async def read_recent_event_memories(
@@ -34,56 +85,65 @@ async def read_recent_event_memories(
 ) -> list[dict[str, Any]]:
     """Return the most recent non-expired event-memory rows for the identity.
 
-    Joins ``agent.session_memory`` to ``agent.session`` so we can filter
-    by ``(channel, channel_user_id)`` rather than per-session_id.
+    Result rows are plain dicts (not MemoryEntry) so the caller can
+    decide whether to surface ``id`` / ``kind`` / ``importance`` to
+    downstream consumers like the prompt renderer.
 
     Args:
-        pool: asyncpg pool with codecs registered.
+        pool: asyncpg pool.
         channel: Channel slug.
         channel_user_id: External user id.
-        limit: Cap on returned rows (chronological newest-first).
+        limit: Cap on returned rows. ``0`` short-circuits.
 
     Returns:
-        A list of ``{summary, metadata, created_at}`` dicts, newest first.
-        Empty list if the identity has no events or all have expired.
+        Newest-first list of ``{id, content, kind, importance, keywords,
+        created_at}`` dicts. Empty list when nothing matches.
     """
     if limit <= 0:
         return []
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT sm.summary, sm.metadata, sm.created_at
-            FROM agent.session_memory sm
-            JOIN agent.session s ON s.session_id = sm.session_id
-            WHERE s.channel = $1
-              AND s.channel_user_id = $2
-              AND (sm.expires_at IS NULL OR sm.expires_at > now())
-            ORDER BY sm.created_at DESC
+            SELECT id, content, kind, importance, keywords, created_at
+            FROM agent.event_memory
+            WHERE channel = $1
+              AND channel_user_id = $2
+              AND (expires_at IS NULL OR expires_at > now())
+            ORDER BY created_at DESC
             LIMIT $3
             """,
             channel,
             channel_user_id,
             limit,
         )
-    out: list[dict[str, Any]] = []
-    for row in rows:
-        meta = row["metadata"]
-        if isinstance(meta, str):
-            try:
-                meta = json.loads(meta)
-            except json.JSONDecodeError:
-                meta = {}
-        out.append(
-            {
-                "summary": row["summary"],
-                "metadata": dict(meta or {}),
-                "created_at": row["created_at"],
-            }
-        )
-    return out
+    return [
+        {
+            "id": str(r["id"]),
+            "content": r["content"],
+            "kind": r["kind"],
+            "importance": float(r["importance"]),
+            "keywords": list(r["keywords"] or []),
+            "created_at": r["created_at"],
+        }
+        for r in rows
+    ]
 
 
-# Re-export so existing callers (`from backend.v.memory.event_memory import
-# render_recent_events_for_prompt`) continue to work after the prompts
-# centralization.
-from backend.v.memory.prompts import render_recent_events_for_prompt  # noqa: E402,F401
+__all__ = [
+    "DEFAULT_EVENT_TTL_DAYS",
+    "insert_event_memories",
+    "read_recent_event_memories",
+    # Re-export so callers (e.g., enter_node) keep working without
+    # re-importing the prompts module separately.
+    "render_recent_events_for_prompt",
+]
+
+
+# Re-export the renderer from the prompts module so existing imports
+# (`from backend.v.memory.event_memory import render_recent_events_for_prompt`)
+# keep working after the prompts centralization.
+from backend.v.memory.prompts import render_recent_events_for_prompt  # noqa: E402
+
+# Backwards-compat alias for ``datetime`` parameter typing in callers
+# that previously imported it from this module.
+__doc_extra_datetime = datetime
