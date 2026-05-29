@@ -34,6 +34,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
+from backend.v.tools.prompts import SUBAGENT_SYSTEM_PROMPT
 from backend.v.utils.logging import bind_request, get_logger
 
 _log = get_logger("tools.subagent")
@@ -43,12 +44,7 @@ DEFAULT_SHARED_TURN_COUNT = 10
 messages to forward. Bounds the token budget so a long conversation
 doesn't make the subagent prompt explode."""
 
-_SUBAGENT_SYSTEM_PROMPT = (
-    "你是父 agent 委托的子任务执行者。"
-    "专注完成 task 中描述的具体工作，给出简洁、可引用的中文回答。"
-    "不要扩展任务边界，不要请求更多上下文，不要假装有工具调用能力。"
-    "如果信息不足以完成任务，直接说明缺什么。"
-)
+_SUBAGENT_SYSTEM_PROMPT = SUBAGENT_SYSTEM_PROMPT
 
 
 def _slice_parent_messages(state: dict[str, Any], limit: int) -> list[BaseMessage]:
@@ -94,7 +90,7 @@ async def subagent(
     messages: list[BaseMessage] = [SystemMessage(content=_SUBAGENT_SYSTEM_PROMPT)]
     if context_mode == "shared":
         messages.extend(_slice_parent_messages(state, DEFAULT_SHARED_TURN_COUNT))
-    messages.append(HumanMessage(content=f"子任务：{task}"))
+    messages.append(HumanMessage(content=f"<task>\n{task}\n</task>"))
 
     with bind_request(subagent_mode=context_mode):
         try:

@@ -22,8 +22,9 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
+from backend.v.agents.prompts import build_main_system_prompt
 from backend.v.agents.state import CustomerServiceState
-from backend.v.memory.event_memory import render_recent_events_for_prompt
+from backend.v.memory.prompts import render_recent_events_for_prompt
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.skills import SkillRegistry
 from backend.v.tools import recall_memory, subagent, transfer_to_human
@@ -37,56 +38,13 @@ Phase-2 P3 added ``recall_memory`` and ``subagent``."""
 
 
 def _system_prompt(profile: dict[str, Any] | None, channel: str) -> str:
-    """Render the base per-turn system prompt without skill / events injection.
+    """Thin alias kept for tests + readability of the call site below.
 
-    Returns an XML-tagged document. Tags are the LLM-friendly way to keep
-    role, behavioral guidance, channel-specific context, and customer
-    metadata visually separated — the model attends to them more reliably
-    than to a wall of prose.
+    Real definition lives in :mod:`backend.v.agents.prompts`. We don't
+    want to inline the prompt here — that would split the prompt audit
+    surface across multiple files.
     """
-    profile_block = ""
-    if profile:
-        bits: list[str] = []
-        if name := profile.get("customer_name"):
-            bits.append(f"  <name>{name}</name>")
-        if level := profile.get("member_level"):
-            bits.append(f"  <member_level>{level}</member_level>")
-        if pref := profile.get("preferred_language"):
-            bits.append(f"  <preferred_language>{pref}</preferred_language>")
-        if bits:
-            profile_block = "\n<customer_profile>\n" + "\n".join(bits) + "\n</customer_profile>"
-
-    channel_text = channel or "未知渠道"
-
-    return f"""<role>
-你是一名外部客户服务助理，正在通过 {channel_text} 与客户对话。
-</role>
-
-<goal>
-准确、礼貌、高效地解决客户的咨询；当问题超出能力或客户明确要求人工时，
-主动调用 transfer_to_human 工具转接。
-</goal>
-
-<capabilities>
-- 回答订单 / 物流 / 退换货 / 会员权益等常规咨询。
-- 调用工具：calculator（数值计算）、search（外部检索）、
-  recall_memory（按语义召回历史会话片段）、subagent（NL2SQL 查业务数据）、
-  transfer_to_human（转人工，会让对话进入人工接管态）。
-- 在工具结果支撑下给出结论；没有支撑时不要编造单号、价格、时间等具体事实。
-</capabilities>
-
-<style>
-- 简短、口语化、不堆砌套话。
-- 涉及具体业务时给出明确步骤而不是泛泛而谈。
-- 不暴露内部实现（"调用工具"、"检索 RAG"等技术名词）。
-- 默认中文；客户档案标注偏好语言时按其偏好。
-</style>
-
-<constraints>
-- 严禁伪造任���具体数字、时间、单号、商品 SKU。
-- 涉及退款 / 投诉 / 情绪激烈时优先转人工，不要自作主张承诺补偿。
-- 工具结果与客户陈述冲突时以工具结果为准，并礼貌指出差异。
-</constraints>{profile_block}"""
+    return build_main_system_prompt(profile, channel)
 
 
 def _latest_human_text(messages: list) -> str:

@@ -25,6 +25,7 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 
 from backend.v.agents.emotion import EmotionDetector
+from backend.v.agents.prompts import INTENT_SYSTEM_PROMPT, REFLECTION_SYSTEM_PROMPT
 from backend.v.agents.state import CustomerServiceState
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.utils.logging import get_logger
@@ -43,12 +44,7 @@ class IntentResult(BaseModel):
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
-_INTENT_SYSTEM = (
-    "你是一名意图分类助手。给定客户的最新消息，输出最匹配的意图。"
-    "只输出 JSON，不要解释。"
-    "意图选项：refund（退款/退货）、logistics（物流/快递/签收）、"
-    "complaint（投诉/不满）、general（其他）。"
-)
+_INTENT_SYSTEM = INTENT_SYSTEM_PROMPT
 
 
 async def intent_node(
@@ -97,7 +93,7 @@ async def intent_node(
 
     prompt = [
         SystemMessage(content=_INTENT_SYSTEM),
-        HumanMessage(content=f"客户消息：{latest_text}"),
+        HumanMessage(content=f"<message>\n{latest_text}\n</message>"),
     ]
     try:
         result = await caller.chat("summary", prompt, structured=IntentResult)
@@ -126,11 +122,7 @@ class ReflectionResult(BaseModel):
     issues: list[str] = Field(default_factory=list)
 
 
-_REFLECT_SYSTEM = (
-    "你是一名事实核查助手。给定 AI 助手的回复和本轮工具调用的结果，"
-    "判断回复中是否引用了工具结果里没有的事实（幻觉）。"
-    '只输出 JSON：{"passes": true/false, "issues": ["..."]}'
-)
+_REFLECT_SYSTEM = REFLECTION_SYSTEM_PROMPT
 
 
 def _collect_tool_facts(messages: list) -> str:
@@ -141,7 +133,7 @@ def _collect_tool_facts(messages: list) -> str:
             content = m.content if isinstance(m.content, str) else str(m.content)
             if content and not content.startswith("[tool_guard]"):
                 facts.append(content)
-    return "\n".join(facts) or "（本轮无工具调用结果）"
+    return "\n".join(facts) or "（本轮无工具调用结果，回复不应引用任何具体事实。）"
 
 
 def _last_ai_reply(messages: list) -> str:
@@ -178,7 +170,11 @@ async def reflection_node(
 
     prompt = [
         SystemMessage(content=_REFLECT_SYSTEM),
-        HumanMessage(content=(f"工具结果：\n{tool_facts}\n\nAI 回复：\n{reply}")),
+        HumanMessage(
+            content=(
+                f"<tool_facts>\n{tool_facts}\n</tool_facts>\n\n<ai_reply>\n{reply}\n</ai_reply>"
+            )
+        ),
     ]
     try:
         result = await caller.chat("summary", prompt, structured=ReflectionResult)

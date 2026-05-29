@@ -36,6 +36,7 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
+from backend.v.memory.prompts import MEMORY_EXTRACTOR_SYSTEM_PROMPT
 from backend.v.memory.session_memory import (
     delete_session_memory,
     read_session_memory,
@@ -83,16 +84,7 @@ class ExtractionOutput(BaseModel):
     )
 
 
-_PROMOTION_SYSTEM_PROMPT = (
-    "你是一名长期记忆抽取助手。"
-    "输入：客户的现有长期画像（user_profile）+ 本次会话的短期记忆（preferences / observations）。"
-    "输出：① 更新后的长期画像，**只**纳入跨会话仍然成立的属性 / 偏好"
-    "（比如「偏好顺丰」「常用普通话」），不要纳入本次会话才出现的临时状态"
-    "（比如「今天心情不好」「今晚要发货」）；保留原有字段，仅在新信息明确支持时增改。"
-    "② episodes 列表（每条是一句独立的中文事实，例如「客户偏好夜间收货」"
-    "「投诉过物流延误」），用于后续语义召回。"
-    "若没有可加入长期记忆的信息，对应字段留空，不要编造。"
-)
+_PROMOTION_SYSTEM_PROMPT = MEMORY_EXTRACTOR_SYSTEM_PROMPT
 
 
 def _build_prompt(
@@ -105,11 +97,13 @@ def _build_prompt(
         SystemMessage(content=_PROMOTION_SYSTEM_PROMPT),
         HumanMessage(
             content=(
-                "现有长期画像（JSON）：\n"
-                f"```json\n{json.dumps(existing_profile, ensure_ascii=False, indent=2)}\n```\n\n"
-                "本次会话短期记忆：\n"
-                f"preferences: {prefs_json}\n"
-                f"observations: {obs_json}\n"
+                "<existing_profile>\n"
+                f"{json.dumps(existing_profile, ensure_ascii=False, indent=2)}\n"
+                "</existing_profile>\n\n"
+                "<session_memory>\n"
+                f"  <preferences>{prefs_json}</preferences>\n"
+                f"  <observations>{obs_json}</observations>\n"
+                "</session_memory>"
             )
         ),
     ]

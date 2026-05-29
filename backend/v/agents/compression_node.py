@@ -30,11 +30,9 @@ from langchain_core.messages import BaseMessage, RemoveMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 from backend.v.agents.state import CustomerServiceState
+from backend.v.memory.prompts import render_session_memory_for_prompt
 from backend.v.memory.session_memory import (
     read_session_memory,
-)
-from backend.v.memory.session_memory import (
-    render_for_prompt as render_session_memory_for_prompt,
 )
 from backend.v.utils.logging import bind_request, get_logger
 from backend.v.utils.tokens import count_messages_tokens
@@ -43,12 +41,13 @@ _log = get_logger("agents.compression")
 
 
 def _summary_block(narrative: str | None, session_memory_block: str) -> str:
-    parts: list[str] = ["（前文已压缩为摘要）"]
-    if narrative:
-        parts.append(narrative)
-    if session_memory_block:
-        parts.append(session_memory_block)
-    return "\n\n".join(parts)
+    """Thin alias kept for the call site below.
+
+    Real implementation in :mod:`backend.v.agents.prompts`.
+    """
+    from backend.v.agents.prompts import build_compression_summary
+
+    return build_compression_summary(narrative, session_memory_block)
 
 
 async def compression_node(

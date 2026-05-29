@@ -83,15 +83,7 @@ async def read_recent_event_memories(
     return out
 
 
-def render_recent_events_for_prompt(events: list[dict[str, Any]]) -> str:
-    """Render the recent events as a compact Chinese block for the system prompt.
-
-    Empty list returns ``""`` so the caller can drop the section cleanly.
-    """
-    if not events:
-        return ""
-    lines = ["最近几次会话的要点（按时间倒序）："]
-    for e in events:
-        when = e["created_at"].strftime("%Y-%m-%d") if e.get("created_at") else ""
-        lines.append(f"- ({when}) {e['summary']}")
-    return "\n".join(lines)
+# Re-export so existing callers (`from backend.v.memory.event_memory import
+# render_recent_events_for_prompt`) continue to work after the prompts
+# centralization.
+from backend.v.memory.prompts import render_recent_events_for_prompt  # noqa: E402,F401

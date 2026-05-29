@@ -76,19 +76,8 @@ async def delete_session_memory(
     await redis.delete(_key(session_id))
 
 
-def render_for_prompt(record: dict[str, Any] | None) -> str:
-    """Render the record as a compact Chinese block for system-prompt injection."""
-    if not record:
-        return ""
-    prefs = record.get("preferences") or {}
-    obs = record.get("observations") or []
-    lines: list[str] = []
-    if prefs:
-        lines.append("本次会话已知偏好：")
-        for k, v in prefs.items():
-            lines.append(f"- {k}：{v}")
-    if obs:
-        lines.append("本次会话观察：")
-        for item in obs:
-            lines.append(f"- {item}")
-    return "\n".join(lines)
+# Re-export so existing callers continue to work after the prompts
+# centralization. Aliased to the canonical name.
+from backend.v.memory.prompts import (  # noqa: E402,F401
+    render_session_memory_for_prompt as render_for_prompt,
+)

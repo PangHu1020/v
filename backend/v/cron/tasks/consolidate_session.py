@@ -35,6 +35,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from pydantic import BaseModel, Field
 
 from backend.v.agents.checkpoints.redis import RedisCheckpointer
+from backend.v.cron.tasks.prompts import SESSION_SUMMARIZER_SYSTEM_PROMPT
 from backend.v.memory.session_memory import write_session_memory
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.utils.logging import bind_request, get_logger
@@ -92,17 +93,7 @@ class SessionExtraction(BaseModel):
     )
 
 
-_SUMMARIZE_SYSTEM_PROMPT = (
-    "你是一名客服会话归档助手。给定一段客服与客户的对话，提取信息以便分层记忆系统使用。"
-    "请用简洁、客观的中文产出。\n\n"
-    "事件记忆字段（narrative / intents / key_facts / sentiment / unresolved）"
-    "用来作为本次会话的中期摘要：narrative 不超过 120 字、key_facts 是事实不是评价。\n\n"
-    "会话记忆字段（preferences / observations）"
-    "用来在本次会话内辅助 agent，不参与跨会话固化决策："
-    "preferences 是客户当下表达的偏好键值对（语言、收货时段、称呼等），"
-    "observations 是当前会话的语气 / 紧急度 / 特殊场景等观察点。\n\n"
-    "若信息不足，相关字段留空，不要编造。"
-)
+_SUMMARIZE_SYSTEM_PROMPT = SESSION_SUMMARIZER_SYSTEM_PROMPT
 
 
 def _format_history(messages: list[BaseMessage]) -> str:
@@ -135,7 +126,7 @@ async def _run_llm_extraction(
 ) -> SessionExtraction | None:
     prompt: list[BaseMessage] = [
         SystemMessage(content=_SUMMARIZE_SYSTEM_PROMPT),
-        HumanMessage(content=f"对话记录：\n\n{transcript}"),
+        HumanMessage(content=f"<transcript>\n{transcript}\n</transcript>"),
     ]
     try:
         result = await llm_caller.chat("summary", prompt, structured=SessionExtraction)

@@ -33,7 +33,15 @@ class TestSystemPrompt:
 
     def test_renders_xml_structure(self) -> None:
         prompt = _system_prompt(None, "wecom")
-        for tag in ("<role>", "</role>", "<goal>", "<capabilities>", "<style>", "<constraints>"):
+        for tag in (
+            "<role>",
+            "</role>",
+            "<task>",
+            "<capabilities>",
+            "<workflow>",
+            "<style>",
+            "<constraints>",
+        ):
             assert tag in prompt
 
     def test_profile_uses_xml_subtags(self) -> None:

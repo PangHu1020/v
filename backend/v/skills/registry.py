@@ -82,14 +82,11 @@ class SkillRegistry:
         return result
 
     def render_for_prompt(self, skills: list[Skill]) -> str:
-        """Render a list of skills as a compact section for the system prompt."""
-        if not skills:
-            return ""
-        sections: list[str] = ["以下 SOP 与本次咨询相关，按优先级排列，请优先遵循："]
-        for s in skills:
-            header = f"## {s.name}"
-            if s.description:
-                header += f"（{s.description}）"
-            sections.append(header)
-            sections.append(s.body.strip())
-        return "\n\n".join(sections)
+        """Render matched skills as XML for system-prompt injection.
+
+        Delegates to :mod:`backend.v.skills.prompts` so the markup
+        sits next to every other prompt in the project.
+        """
+        from backend.v.skills.prompts import render_sops_for_prompt
+
+        return render_sops_for_prompt(skills)
