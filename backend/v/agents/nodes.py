@@ -32,12 +32,12 @@ from backend.v.memory.prompts import (
 from backend.v.memory.types import MemoryEntry, UserProfile
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.skills import SkillRegistry
-from backend.v.tools import recall_memory, subagent, transfer_to_human
+from backend.v.tools import calculator, recall_memory, search, subagent, transfer_to_human
 from backend.v.utils.logging import get_logger
 
 _log = get_logger("agents.nodes")
 
-AGENT_TOOLS: list = [transfer_to_human, recall_memory, subagent]
+AGENT_TOOLS: list = [calculator, search, recall_memory, subagent, transfer_to_human]
 """Tools bound to the main agent."""
 
 
@@ -209,6 +209,7 @@ async def agent_node(
         "main_primary",
         list(state.get("messages", [])),
         tools=bound_tools,
+        config=config,
     )
     _log.info(
         "agents.agent_node.replied",
