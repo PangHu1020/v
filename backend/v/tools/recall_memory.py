@@ -126,7 +126,7 @@ async def _recall(
     ]
 
 
-@tool("recall_memory")
+@tool("recall_memory", parse_docstring=True)
 async def recall_memory(
     query: str,
     config: RunnableConfig,

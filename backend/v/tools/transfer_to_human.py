@@ -25,7 +25,7 @@ from langchain_core.tools import tool
 from langgraph.types import interrupt
 
 
-@tool("transfer_to_human")
+@tool("transfer_to_human", parse_docstring=True)
 def transfer_to_human(reason: str) -> str:
     """Transfer the conversation to a human operator.
 

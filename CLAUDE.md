@@ -51,7 +51,7 @@ Agent invokes `transfer_to_human` tool → LangGraph `interrupt()` suspends the 
 - **Unidirectional Dependency**: `/app/` depends on `/v/`'s interfaces. `/v/` MUST NOT import from `/app/`.
 - **Infrastructure Injection**: PostgreSQL pool, Redis client, MySQL is **forbidden** (see below). Initialized in `/app/store/` during FastAPI lifespan, passed to `/v/` via dependency injection or app context.
 - **Single Postgres Instance, Multiple Schemas**:
-  - `agent` schema: agent memory, sessions, checkpointer, user_profile, memory_episodes (with pgvector).
+  - `agent` schema: agent memory, sessions, checkpointer, user_profile, event_memory, knowledge_chunk (with pgvector).
   - `dw` schema: business data warehouse (migrated from legacy `dw.sql`, originally MySQL).
   - `meta` schema: NL2SQL semantic metadata (migrated from legacy `meta.sql`, originally MySQL).
 - **Bus = Redis Streams; Cron = ARQ**: do not conflate them. Streams handle reactive ordering and replay; ARQ handles delayed/scheduled jobs (cron + memory consolidation).

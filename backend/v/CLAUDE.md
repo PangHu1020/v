@@ -21,12 +21,12 @@ Strict directory boundaries:
     - `long_term.py`: Postgres long-term memory split into two tables — see Memory Hierarchy below.
     - `memory_extractor.py`: async coroutine that extracts profile + episodic memories from session memory using DeepSeek v4 flash with structured Pydantic output. Handles **dedup, conflict, and obsolescence** on write to `user_profile` and `memory_episodes`.
     - `checkpointer.py`: hot/cold migration logic (Redis ⇄ Postgres) on `interrupt()` / `resume`.
-  - `/tools`: Built-in tools, all implemented via LangChain `@tool`:
-    - `calculator`
-    - `transfer_to_human` — invokes LangGraph `interrupt()` primitive
-    - `search`
-    - `recall_memory` — on-demand semantic query against `memory_episodes` (recency-weighted cosine)
-    - `subagent` — independent-context subagent. **MVP business**: NL2SQL against the `dw` schema, using the `meta` schema for schema linking.
+  - `/tools`: Built-in tools, all implemented via LangChain `@tool(parse_docstring=True)` so the docstring IS the tool description exposed to the LLM. Each tool's "when to use" lives in its own docstring, not in the system prompt.
+    - `calculator` — safe AST eval (no `eval()`, whitelisted ops, exponent ≤ 64).
+    - `transfer_to_human` — invokes LangGraph `interrupt()` primitive.
+    - `search` — generic semantic recall over `agent.knowledge_chunk` (products / FAQ / policies). Catch-all RAG: items carry their `(source_type, source_id)` for follow-up. Does NOT recency-rank — knowledge corpora are roughly equally fresh.
+    - `recall_memory` — on-demand semantic query against `agent.event_memory` (recency-weighted cosine) for THIS customer's prior conversations. Distinct from `search`: this is per-customer episodic memory, not the shared knowledge corpus.
+    - `subagent` — focused single-shot delegate with its own context window. Function is intentionally NOT pinned: invoke when a step benefits from independent reasoning (multi-step decomposition, isolated reformatting, NL2SQL, etc.). The LLM decides; do not enumerate a fixed list of "valid" subtasks here.
   - `/mcp`: Model Context Protocol client. Supports stdio + HTTP/SSE transports, OAuth + API-Key auth. Tool-result cache: `tool_name + args_hash` keyed, 5-min in-memory L1 + 24-h Redis L2; write-class tools opt-out.
   - `/skills`: Skill management. Two formats supported: pure markdown SOP, and `SKILL.md` + executable scripts. Sources: internal repo + community registry. **Executable scripts run only from internal-repo or whitelisted community sources; un-whitelisted community skills degrade to markdown-only mode.**
   - `/models`: LLM and embedding factory. OpenAI-compatible adapters via `langchain-openai` `ChatOpenAI(base_url=...)`. Per-task routing read from `.env`. Same-family fallback only (e.g., `pro → flash`); cross-family fallback deferred. Trigger conditions: 30-second timeout (one shot), HTTP 5xx, HTTP 429.
@@ -55,7 +55,7 @@ Strict directory boundaries:
   - **Session Memory (Postgres)**: consolidated summary of a session. Written by hook-triggered `summarizer` when (a) context exceeds token threshold, or (b) ARQ delayed job fires near TTL expiry, or (c) `on_session_end`. Cleared/archived after long-term extraction.
   - **Long-term Memory (Postgres, two tables)**:
     - `user_profile`: structured, **one row per `(channel, channel_user_id)`** (preferences, member level, recent-order summary, etc.). Fully injected into system prompt at every `on_session_start`.
-    - `memory_episodes`: vectorized (Qwen `text-embedding-v4`, 1024-dim Matryoshka), pgvector HNSW index. Queried on-demand via the `recall_memory` tool with recency-weighted cosine ranking.
+    - `event_memory`: vectorized (Qwen `text-embedding-v4`, 1024-dim Matryoshka), pgvector HNSW index. Queried on-demand via the `recall_memory` tool with recency-weighted cosine ranking. Distinct from `agent.knowledge_chunk` (which `search` reads): event_memory is per-customer episodic; knowledge_chunk is the shared corpus.
     - Writes use `memory_extractor` with DeepSeek v4 flash + Pydantic structured output. **Dedup, conflict, and obsolescence are mandatory** — never blindly append.
 - **Checkpointer Hot/Cold Migration**: Working Memory in Redis IS the LangGraph checkpointer on the hot path. On `interrupt()` (transfer_to_human), `on_interrupt` hook migrates the full state to a durable Postgres checkpointer and removes TTL. On `Command(resume=...)`, `on_resume` migrates back with a fresh 30-min TTL. This is the only sanctioned violation of "single store" and is owned by `/memory/checkpointer.py`.
 - **Human Handoff**: implemented via LangGraph `interrupt()`. While suspended:
@@ -67,12 +67,13 @@ Strict directory boundaries:
 - **Skill**: install / update / list / pin operations are handled in `/skills`. Trust boundary enforced when loading executable skills.
 - **Cron (ARQ)**: scheduled outreach + delayed memory consolidation. Cron-generated outbound messages MUST be persisted to working memory before being pushed to the channel — they are part of conversation history, not fire-and-forget.
 
-# Built-in Tools (LangChain `@tool`)
-- `calculator`
-- `transfer_to_human` — calls LangGraph `interrupt()` with handoff payload
-- `search`
-- `recall_memory` — on-demand semantic recall against `memory_episodes`
-- `subagent` — independent-context LangGraph subgraph. **First concrete use case: NL2SQL** against `dw` schema with `meta` schema for schema linking. The subagent has its own internal tools `query_metric_meta` and `execute_sql` (read-only).
+# Built-in Tools (LangChain `@tool(parse_docstring=True)`)
+All tool descriptions live in their docstrings (single source of truth — the system prompt does NOT re-document them). Adding/changing a tool means editing the docstring; the LLM sees it via `parse_docstring=True`.
+- `calculator` — deterministic arithmetic over a whitelisted AST.
+- `transfer_to_human` — calls LangGraph `interrupt()` with the handoff payload.
+- `search` — semantic recall over `agent.knowledge_chunk` (products / FAQ / policies). Optional `source_type` filter. Returns chunks tagged `[source_type:source_id]`.
+- `recall_memory` — semantic recall over `agent.event_memory` for the current customer (recency-weighted cosine). Customer-scoped; cannot leak across users.
+- `subagent` — single-shot delegate with isolated context. Function intentionally unrestricted: the main agent invokes it whenever an independent reasoning context helps. Subagents may register their own tools (e.g., NL2SQL one would carry `query_metric_meta` + read-only `execute_sql`), but the parent's docstring does NOT pin a fixed use case.
 
 # LLM & Embedding Routing
 All providers must be OpenAI-compatible (use `ChatOpenAI(base_url=...)`).

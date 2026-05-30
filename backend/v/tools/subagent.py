@@ -55,7 +55,7 @@ def _slice_parent_messages(state: dict[str, Any], limit: int) -> list[BaseMessag
     return body[-limit:] if limit > 0 else []
 
 
-@tool("subagent")
+@tool("subagent", parse_docstring=True)
 async def subagent(
     task: str,
     state: Annotated[dict, InjectedState],
@@ -94,7 +94,7 @@ async def subagent(
 
     with bind_request(subagent_mode=context_mode):
         try:
-            result = await llm_caller.chat("main_fallback", messages)
+            result = await llm_caller.chat("main_fallback", messages, config=config)
         except Exception as exc:
             _log.error("tools.subagent.llm_failed", error=type(exc).__name__)
             return f"[subagent_error] llm failed: {type(exc).__name__}"
