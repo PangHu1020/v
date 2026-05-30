@@ -23,7 +23,9 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.runnables import RunnableConfig
 from openai import APITimeoutError, InternalServerError, RateLimitError
+from pydantic import BaseModel
 
 from backend.v.configs.base import LLMSettings
 from backend.v.models.factory import get_chat_model
@@ -44,13 +46,20 @@ _FALLBACK_ERRORS: tuple[type[Exception], ...] = (
 
 @dataclass(frozen=True, slots=True)
 class LLMResult:
-    """The output of a successful LLM call plus accounting metadata."""
+    """The output of a successful LLM call plus accounting metadata.
+
+    When the call used ``structured=...``, ``parsed`` holds the validated
+    Pydantic instance and ``message.content`` mirrors it as JSON. Callers
+    must not re-parse ``message.content`` themselves — see
+    ``backend/v/CLAUDE.md`` "No Manual LLM Output Parsing".
+    """
 
     message: AIMessage
     model: str
     role: LLMRole
     fallback_used: bool
     latency_ms: int
+    parsed: BaseModel | None = None
 
 
 class LLMCaller:
@@ -67,6 +76,7 @@ class LLMCaller:
         *,
         structured: type[Any] | None = None,
         tools: list[Any] | None = None,
+        config: RunnableConfig | None = None,
     ) -> LLMResult:
         """Send ``messages`` through the configured chat model for ``role``.
 
@@ -78,6 +88,11 @@ class LLMCaller:
                 will be an ``AIMessage`` whose ``content`` is the JSON of the
                 parsed model.
             tools: Optional list of LangChain tools to bind for the call.
+            config: When called from inside a LangGraph node, forward the
+                node's ``RunnableConfig`` so the LLM call appears as a child
+                of the graph run in LangSmith. Without this, traces end at
+                the graph boundary and individual node / tool calls are
+                invisible in the UI.
 
         Returns:
             :class:`LLMResult`.
@@ -96,6 +111,7 @@ class LLMCaller:
                 structured=structured,
                 tools=tools,
                 fallback_used=False,
+                config=config,
             )
         except _FALLBACK_ERRORS as primary_err:
             if not fallback_model or fallback_model == primary_model:
@@ -115,6 +131,7 @@ class LLMCaller:
                     structured=structured,
                     tools=tools,
                     fallback_used=True,
+                    config=config,
                 )
             except Exception as fb_err:
                 _log.error(
@@ -151,6 +168,7 @@ class LLMCaller:
         structured: type[Any] | None,
         tools: list[Any] | None,
         fallback_used: bool,
+        config: RunnableConfig | None = None,
     ) -> LLMResult:
         chat = get_chat_model(self._settings, role if not fallback_used else "main_fallback")
         # Override the resolved model in case ``role`` and ``model`` diverge
@@ -164,11 +182,39 @@ class LLMCaller:
         elif tools:
             runnable = chat.bind_tools(tools)
 
+        # Tag the LLM run so it shows up in LangSmith with a meaningful
+        # name. Forwarding the parent config keeps the call attached to
+        # the graph trace tree (otherwise it appears as a top-level run).
+        invoke_config: RunnableConfig = dict(config) if config else {}
+        invoke_config.setdefault("run_name", f"llm:{role}:{model}")
+        existing_tags = list(invoke_config.get("tags") or [])
+        invoke_config["tags"] = [*existing_tags, f"role:{role}", f"model:{model}"]
+        invoke_config["metadata"] = {
+            **(invoke_config.get("metadata") or {}),
+            "llm_role": role,
+            "llm_model": model,
+            "llm_fallback_used": fallback_used,
+        }
+
         started = time.perf_counter()
-        result = await asyncio.wait_for(runnable.ainvoke(messages), timeout=self._timeout)
+        result = await asyncio.wait_for(
+            runnable.ainvoke(messages, config=invoke_config),
+            timeout=self._timeout,
+        )
         latency_ms = int((time.perf_counter() - started) * 1000)
 
-        ai_message = result if isinstance(result, AIMessage) else AIMessage(content=str(result))
+        parsed: BaseModel | None = None
+        if isinstance(result, AIMessage):
+            ai_message = result
+        elif isinstance(result, BaseModel):
+            # ``with_structured_output(..., include_raw=False)`` returns a
+            # Pydantic instance directly. Stash it on ``parsed`` and mirror
+            # as JSON in the AIMessage so any logging / persistence stays
+            # well-formed (Python ``repr`` is NOT JSON).
+            parsed = result
+            ai_message = AIMessage(content=result.model_dump_json())
+        else:
+            ai_message = AIMessage(content=str(result))
         _log.info(
             "llm.invoked",
             role=role,
@@ -182,4 +228,5 @@ class LLMCaller:
             role=role,
             fallback_used=fallback_used,
             latency_ms=latency_ms,
+            parsed=parsed,
         )

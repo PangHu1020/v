@@ -37,7 +37,7 @@ def _bound_chat(behavior_per_call: list) -> MagicMock:
     """Build a mock chat model whose successive ``ainvoke`` calls follow ``behavior_per_call``."""
     chat = MagicMock()
 
-    async def _ainvoke(messages):
+    async def _ainvoke(messages, config=None):
         action = behavior_per_call.pop(0)
         if isinstance(action, BaseException):
             raise action
@@ -119,7 +119,7 @@ class TestFallbackTriggers:
     async def test_asyncio_timeout_falls_back(
         self, settings: LLMSettings, patch_factory: list
     ) -> None:
-        async def slow(_msgs):
+        async def slow(_msgs, config=None):
             await asyncio.sleep(10)
             return AIMessage(content="too late")
 

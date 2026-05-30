@@ -27,13 +27,26 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from backend.v.agents.intent_reflect import (
     MAX_REFLECTION_RETRIES,
+    IntentResult,
+    ReflectionResult,
     intent_node,
     reflection_node,
 )
 from backend.v.models.llm_caller import LLMResult
 
 
-def _llm(payload: dict[str, Any]) -> AsyncMock:
+def _llm(payload: dict[str, Any], *, model_cls: type | None = None) -> AsyncMock:
+    """Build a mock LLMCaller whose ``.chat()`` returns a canned result.
+
+    When ``model_cls`` is provided, ``parsed`` is set to a validated
+    instance of that class. Otherwise we infer from the payload keys.
+    """
+    if model_cls is None:
+        if "intent" in payload:
+            model_cls = IntentResult
+        else:
+            model_cls = ReflectionResult
+    parsed = model_cls.model_validate(payload)
     caller = AsyncMock()
     caller.chat = AsyncMock(
         return_value=LLMResult(
@@ -42,6 +55,7 @@ def _llm(payload: dict[str, Any]) -> AsyncMock:
             role="summary",
             fallback_used=False,
             latency_ms=5,
+            parsed=parsed,
         )
     )
     return caller

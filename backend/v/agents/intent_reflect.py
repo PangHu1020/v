@@ -16,7 +16,6 @@ unconditionally.
 
 from __future__ import annotations
 
-import json
 import time
 from typing import Any, Literal
 
@@ -96,11 +95,8 @@ async def intent_node(
         HumanMessage(content=f"<message>\n{latest_text}\n</message>"),
     ]
     try:
-        result = await caller.chat("summary", prompt, structured=IntentResult)
-        payload = (
-            json.loads(result.message.content) if isinstance(result.message.content, str) else {}
-        )
-        ir = IntentResult.model_validate(payload)
+        result = await caller.chat("summary", prompt, structured=IntentResult, config=config)
+        ir = result.parsed if isinstance(result.parsed, IntentResult) else IntentResult()
     except Exception as exc:
         _log.warning("intent_node.failed", error=type(exc).__name__)
         return {"intent": "general"}
@@ -177,11 +173,8 @@ async def reflection_node(
         ),
     ]
     try:
-        result = await caller.chat("summary", prompt, structured=ReflectionResult)
-        payload = (
-            json.loads(result.message.content) if isinstance(result.message.content, str) else {}
-        )
-        rr = ReflectionResult.model_validate(payload)
+        result = await caller.chat("summary", prompt, structured=ReflectionResult, config=config)
+        rr = result.parsed if isinstance(result.parsed, ReflectionResult) else ReflectionResult()
     except Exception as exc:
         _log.warning("reflection_node.failed", error=type(exc).__name__)
         return {}
