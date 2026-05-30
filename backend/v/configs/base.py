@@ -44,6 +44,23 @@ class LLMSettings(BaseSettings):
     timeout_seconds: int = 30
 
 
+class LangSmithSettings(BaseSettings):
+    """LangSmith tracing configuration.
+
+    When ``api_key`` is set and ``tracing`` is true, every LangChain /
+    LangGraph invocation in this process emits a trace to the LangSmith
+    project named by ``project``. The integration is opt-in: with no key
+    set, nothing is sent and there is zero runtime overhead.
+    """
+
+    model_config = SettingsConfigDict(**_COMMON, env_prefix="LANGSMITH_")
+
+    tracing: bool = False
+    api_key: str = ""
+    project: str = "v-main"
+    endpoint: str = "https://api.smith.langchain.com"
+
+
 class EmbeddingSettings(BaseSettings):
     """Embedding model configuration. Uses Qwen credentials from ``LLMSettings``."""
 
@@ -258,6 +275,7 @@ class AppSettings(BaseModel):
     mcp: MCPSettings
     arq: ARQSettings
     skill: SkillSettings
+    langsmith: LangSmithSettings
 
 
 @lru_cache(maxsize=1)
@@ -283,4 +301,5 @@ def get_settings() -> AppSettings:
         mcp=MCPSettings(),
         arq=ARQSettings(),
         skill=SkillSettings(),
+        langsmith=LangSmithSettings(),
     )

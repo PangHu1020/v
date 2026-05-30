@@ -47,6 +47,7 @@ from backend.v.models.llm_caller import LLMCaller
 from backend.v.skills import SkillRegistry, load_skills
 from backend.v.utils.logging import configure as configure_logging
 from backend.v.utils.logging import get_logger
+from backend.v.utils.tracing import configure_langsmith
 
 _log = get_logger("app.main")
 
@@ -56,6 +57,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Manage process-wide resources for the FastAPI app."""
     settings = get_settings()
     configure_logging(level=settings.runtime.log_level, json=settings.runtime.env != "dev")
+    configure_langsmith(settings.langsmith)
     _log.info("app.startup", env=settings.runtime.env, slack_enabled=settings.slack.enabled)
 
     pg_pool = await create_pool(settings.db.dsn)

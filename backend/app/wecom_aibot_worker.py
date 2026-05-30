@@ -34,6 +34,7 @@ from backend.app.store import close_client, create_client
 from backend.v.configs import get_settings
 from backend.v.utils.logging import configure as configure_logging
 from backend.v.utils.logging import get_logger
+from backend.v.utils.tracing import configure_langsmith
 
 _log = get_logger("app.wecom_aibot_worker")
 
@@ -82,6 +83,7 @@ async def _outbound_subscriber(
 async def main() -> None:
     settings = get_settings()
     configure_logging(level=settings.runtime.log_level, json=settings.runtime.env != "dev")
+    configure_langsmith(settings.langsmith)
 
     if not settings.wecom_aibot.ws_url:
         _log.error("wecom_aibot_worker.disabled", reason="WECOM_AIBOT_WS_URL is empty")

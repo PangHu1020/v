@@ -162,6 +162,7 @@ class TestMain:
         with (
             patch.object(wecom_aibot_worker, "get_settings", return_value=fake_settings),
             patch.object(wecom_aibot_worker, "configure_logging") as mock_cfg,
+            patch.object(wecom_aibot_worker, "configure_langsmith"),
             patch.object(wecom_aibot_worker, "create_client") as mock_create,
         ):
             await wecom_aibot_worker.main()
