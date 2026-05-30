@@ -23,6 +23,7 @@ channel adapter (per the architectural rule in ``backend/app/CLAUDE.md``).
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -287,7 +288,17 @@ def make_bus_handler(
                         "emotion_threshold": emotion_threshold,
                         "consolidate_callable": consolidate_callable,
                         "consolidate_ctx": consolidate_ctx,
-                    }
+                    },
+                    # LangSmith filtering levers — surface in the trace UI.
+                    "run_name": f"turn:{msg.channel}:{msg.channel_user_id}",
+                    "tags": [f"channel:{msg.channel}", f"session:{session_id}"],
+                    "metadata": {
+                        "channel": msg.channel,
+                        "channel_user_id": msg.channel_user_id,
+                        "session_id": session_id,
+                        "session_minted": minted,
+                        "dedup_key": msg.dedup_key,
+                    },
                 }
 
                 _log.info(
@@ -337,7 +348,9 @@ def make_bus_handler(
                     else:
                         segments = split_reply_segments(reply)
                         t2 = time.perf_counter()
-                        for seg in segments:
+                        for i, seg in enumerate(segments):
+                            if i > 0:
+                                await asyncio.sleep(0.25)
                             await send(msg.channel_user_id, seg)
                         send_ms = int((time.perf_counter() - t2) * 1000)
                         segments_sent = len(segments)

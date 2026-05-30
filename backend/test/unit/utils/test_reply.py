@@ -31,3 +31,20 @@ class TestSplitReplySegments:
     def test_blank_only_segments_dropped(self) -> None:
         reply = "\n\n实际内容\n\n   \n\n"
         assert split_reply_segments(reply) == ["实际内容"]
+
+    def test_caps_at_max_segments_default(self) -> None:
+        reply = "a\n\nb\n\nc\n\nd\n\ne\n\nf"
+        result = split_reply_segments(reply)
+        assert len(result) == 4
+        assert result[:3] == ["a", "b", "c"]
+        assert result[3] == "d\n\ne\n\nf"
+
+    def test_caps_at_custom_max(self) -> None:
+        reply = "1\n\n2\n\n3\n\n4\n\n5"
+        result = split_reply_segments(reply, max_segments=2)
+        assert result == ["1", "2\n\n3\n\n4\n\n5"]
+
+    def test_exactly_at_cap_no_merge(self) -> None:
+        reply = "a\n\nb\n\nc\n\nd"
+        result = split_reply_segments(reply)
+        assert result == ["a", "b", "c", "d"]

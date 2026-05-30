@@ -22,6 +22,7 @@ available verbatim to the resumed agent.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
@@ -233,7 +234,9 @@ async def on_resume(
                 _log.error("hooks.handoff.resume.no_send_registered", channel=channel)
             else:
                 segments = split_reply_segments(reply)
-                for seg in segments:
+                for i, seg in enumerate(segments):
+                    if i > 0:
+                        await asyncio.sleep(0.25)
                     await send(channel_user_id, seg)
                 _log.info(
                     "hooks.handoff.resume.replied",
