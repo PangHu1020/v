@@ -1,19 +1,8 @@
-"""ARQ worker entry point (Phase-2 P2).
+"""ARQ worker entry point.
 
 Run as a separate process from the FastAPI app:
 
     uv run arq backend.app.cron_worker.WorkerSettings
-
-Lives under ``/app/`` because it imports both ``/app/`` channel adapters
-(to dispatch proactive messages) and ``/v/cron`` task definitions. Core
-task logic stays in ``/v/`` per the layering rule; this module is the
-only place where the two layers meet for the cron pathway, mirroring
-how :mod:`backend.app.main` is the meeting point for the reactive
-pathway.
-
-The worker connects to Postgres + Redis on startup, builds the channel
-outbound clients + LLMCaller, packs them into the ARQ context dict, and
-hands them to the per-task functions on each invocation.
 """
 
 from __future__ import annotations
@@ -23,10 +12,8 @@ from typing import Any, ClassVar
 from arq.connections import RedisSettings as ArqRedisSettings
 from arq.cron import cron
 
-from backend.app.channels.feishu.outbound import FeishuOutbound
-from backend.app.channels.wecom.outbound import WecomOutbound
-from backend.app.channels.wecom_aibot.outbound import WecomAibotOutbound
 from backend.app.store import close_client, close_pool, create_client, create_pool
+from backend.app.wecom_aibot.outbound import WecomAibotOutbound
 from backend.v.configs import get_settings
 from backend.v.cron import (
     build_repurchase_targets,
@@ -51,8 +38,6 @@ async def _scheduled_repurchase_run(ctx: dict[str, Any]) -> dict[str, int]:
 
 
 def _arq_redis_settings(url: str) -> ArqRedisSettings:
-    """Translate a ``redis://host:port/db`` URL into ARQ's RedisSettings."""
-    # ARQ provides a parser; using it keeps us in sync with future URL changes.
     return ArqRedisSettings.from_dsn(url)
 
 
@@ -64,15 +49,6 @@ async def on_startup(ctx: dict[str, Any]) -> None:
     pool = await create_pool(settings.db.dsn)
     redis = await create_client(settings.redis.url)
 
-    wecom_outbound = WecomOutbound(
-        corp_id=settings.wecom.corp_id,
-        secret=settings.wecom.secret,
-        agent_id=settings.wecom.agent_id,
-    )
-    feishu_outbound = FeishuOutbound(
-        app_id=settings.feishu.app_id,
-        app_secret=settings.feishu.app_secret,
-    )
     wecom_aibot_outbound = WecomAibotOutbound(
         redis,
         pubsub_channel=settings.wecom_aibot.outbound_pubsub_channel,
@@ -83,12 +59,8 @@ async def on_startup(ctx: dict[str, Any]) -> None:
             "settings": settings,
             "pool": pool,
             "redis": redis,
-            "wecom_outbound": wecom_outbound,
-            "feishu_outbound": feishu_outbound,
             "wecom_aibot_outbound": wecom_aibot_outbound,
             "sends": {
-                "wecom": wecom_outbound.send_text,
-                "feishu": feishu_outbound.send_text,
                 "wecom_aibot": wecom_aibot_outbound.send_text,
             },
             "llm_caller": LLMCaller(settings.llm),
@@ -100,22 +72,12 @@ async def on_startup(ctx: dict[str, Any]) -> None:
 
 async def on_shutdown(ctx: dict[str, Any]) -> None:
     _log.info("cron_worker.shutdown")
-    await ctx["wecom_outbound"].aclose()
-    await ctx["feishu_outbound"].aclose()
     await close_client(ctx["redis"])
     await close_pool(ctx["pool"])
 
 
 class WorkerSettings:
-    """ARQ worker definition. Pass to ``arq`` CLI as a dotted path.
-
-    ``functions`` are on-demand jobs you can enqueue from anywhere via
-    ``redis_pool.enqueue_job("notify_logistics_delivered", ...)``.
-
-    ``cron_jobs`` run on a schedule. Phase-2 P2 ships one daily run of
-    repurchase reminders; logistics + ad push are event-driven and
-    enqueued from elsewhere (the bus worker or an admin endpoint).
-    """
+    """ARQ worker definition. Pass to ``arq`` CLI as a dotted path."""
 
     functions: ClassVar = [
         notify_logistics_delivered,
@@ -125,9 +87,6 @@ class WorkerSettings:
         _scheduled_repurchase_run,
     ]
     cron_jobs: ClassVar = [
-        # 09:30 every day — well after the 09:00 batch jobs hit but before
-        # most customers start their afternoon session. The off-zero minute
-        # is deliberate to avoid the API stampede that lands on every :00.
         cron(_scheduled_repurchase_run, hour={9}, minute={30}),
     ]
     on_startup = on_startup
@@ -135,7 +94,5 @@ class WorkerSettings:
     max_jobs = 10
     job_timeout = 120
 
-    # ARQ reads ``redis_settings`` as a plain class attribute (not a
-    # classmethod / property). Resolve the URL once at class load.
     _settings = get_settings()
     redis_settings = _arq_redis_settings(_settings.arq.effective_redis_url(_settings.redis.url))

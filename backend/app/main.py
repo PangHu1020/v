@@ -1,10 +1,8 @@
 """FastAPI application entrypoint.
 
 Owns the lifespan: opens the asyncpg pool and Redis client on startup,
-constructs the per-channel adapter chain (debouncer + producer + outbound),
-optionally constructs the Slack operator adapter and durable Postgres
-checkpointer for Phase-2 handoff, spawns the bus consumer task wired to
-the LangGraph turn handler, mounts the gateway / channel / operator
+constructs the WeCom 智能机器人 outbound adapter, spawns the bus consumer
+task wired to the LangGraph turn handler, mounts the gateway / operator
 routers, and tears everything down on shutdown.
 """
 
@@ -22,14 +20,6 @@ from backend.app.bus.messages import SystemMessage
 from backend.app.bus.producer import BusProducer
 from backend.app.bus.shard import RedisStreamShard
 from backend.app.bus.worker import make_bus_handler
-from backend.app.channels.debounce import Debouncer
-from backend.app.channels.feishu.crypto import FeishuCrypto
-from backend.app.channels.feishu.outbound import FeishuOutbound
-from backend.app.channels.feishu.router import build_router as build_feishu_router
-from backend.app.channels.wecom.crypto import WecomCrypto
-from backend.app.channels.wecom.outbound import WecomOutbound
-from backend.app.channels.wecom.router import build_router as build_wecom_router
-from backend.app.channels.wecom_aibot.outbound import WecomAibotOutbound
 from backend.app.gateway.middleware import RequestIdMiddleware
 from backend.app.gateway.routers import health
 from backend.app.operator.slack.outbound import SlackOutbound
@@ -41,7 +31,6 @@ from backend.v.agents.graph import build_graph
 from backend.v.configs import get_settings
 from backend.v.cron.tasks.consolidate_session import consolidate_session
 from backend.v.hooks.handoff import append_operator_log, on_resume
-from backend.v.mcp import MCPRegistry, MCPToolCache, parse_servers
 from backend.v.models.factory import get_embedding
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.skills import SkillRegistry, load_skills
@@ -73,85 +62,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     async def channel_to_bus(message: SystemMessage) -> None:
         await producer.enqueue(message)
 
-    debouncer = Debouncer(
-        redis,
-        window_ms=settings.bus.debounce_ms,
-        dispatch=channel_to_bus,
-    )
-
-    # Per-channel enable predicates. A channel is "enabled" when its
-    # required credentials are present in the env. Disabled channels skip
-    # adapter construction AND router mount, so a deployment that only
-    # uses, e.g., the WeCom 智能机器人 WS worker doesn't need to fill in
-    # WeCom HTTP webhook keys to start.
-    wecom_enabled = bool(settings.wecom.corp_id and settings.wecom.aes_key)
-    feishu_enabled = bool(settings.feishu.encrypt_key)
-
-    wecom_crypto = (
-        WecomCrypto(settings.wecom.aes_key, settings.wecom.corp_id) if wecom_enabled else None
-    )
-    feishu_crypto = FeishuCrypto(settings.feishu.encrypt_key) if feishu_enabled else None
-
-    wecom_outbound = (
-        WecomOutbound(
-            corp_id=settings.wecom.corp_id,
-            secret=settings.wecom.secret,
-            agent_id=settings.wecom.agent_id,
-        )
-        if wecom_enabled
-        else None
-    )
-    feishu_outbound = (
-        FeishuOutbound(
-            app_id=settings.feishu.app_id,
-            app_secret=settings.feishu.app_secret,
-        )
-        if feishu_enabled
-        else None
-    )
-    wecom_aibot_outbound = WecomAibotOutbound(
-        redis,
-        pubsub_channel=settings.wecom_aibot.outbound_pubsub_channel,
-    )
-
     redis_ckpt = RedisCheckpointer(redis, ttl_seconds=settings.memory.working_ttl_seconds)
     llm_caller = LLMCaller(settings.llm)
     embedder = get_embedding(settings.llm, settings.embedding)
 
-    # Phase-2 P4: skill registry. Empty path keeps the registry empty
-    # and enter_node skips injection cleanly.
     skill_registry = SkillRegistry(load_skills(settings.skill.internal_repo_path))
     if settings.skill.internal_repo_path:
         _log.info("app.skills.loaded", count=len(skill_registry))
 
-    # Phase-2 P1: MCP registry. Tools discovered here are bound to the
-    # agent at graph build time, alongside transfer_to_human.
-    mcp_cache = MCPToolCache(
+    graph = build_graph(redis_ckpt)
+
+    from backend.app.wecom_aibot.outbound import WecomAibotOutbound
+
+    wecom_aibot_outbound = WecomAibotOutbound(
         redis,
-        l1_ttl_seconds=settings.mcp.cache_l1_ttl_seconds,
-        l2_ttl_seconds=settings.mcp.cache_l2_ttl_seconds,
+        pubsub_channel=settings.wecom_aibot.outbound_pubsub_channel,
     )
-    mcp_configs = parse_servers(settings.mcp.servers_json)
-    mcp_registry = MCPRegistry(
-        mcp_configs,
-        mcp_cache,
-        call_timeout_seconds=settings.mcp.call_timeout_seconds,
-    )
-    if mcp_configs:
-        await mcp_registry.connect_all()
-        _log.info("app.mcp.connected", tool_count=len(mcp_registry.tools))
-
-    graph = build_graph(redis_ckpt, extra_tools=mcp_registry.tools)
-
     sends: dict[str, Any] = {"wecom_aibot": wecom_aibot_outbound.send_text}
-    if wecom_outbound is not None:
-        sends["wecom"] = wecom_outbound.send_text
-    if feishu_outbound is not None:
-        sends["feishu"] = feishu_outbound.send_text
 
-    # Phase-2 P0: Slack operator adapter + durable Postgres checkpointer
-    # for handoff. Wired in lazily so deployments without Slack credentials
-    # keep the Phase-1 single-loop flow.
     exit_stack = AsyncExitStack()
     slack_outbound: SlackOutbound | None = None
     pg_ckpt = None
@@ -168,10 +96,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         async def _slack_on_resume(session_id: str) -> None:
             await on_resume(
                 session_id=session_id,
-                # We don't know channel/channel_user_id at the Slack callback
-                # site (only session_id). The on_resume hook needs them so
-                # it can dispatch the AI's reply via the right channel
-                # adapter. We resolve them by reading the agent.session row.
                 channel=await _channel_for_session(pg_pool, session_id),
                 channel_user_id=await _channel_user_id_for_session(pg_pool, session_id),
                 redis=redis,
@@ -184,8 +108,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
 
         async def _slack_on_operator_message(session_id: str, text: str) -> None:
-            # Persist for the resume payload AND relay back to the customer
-            # so they see the operator's response in real time.
             await append_operator_log(session_id, text, redis=redis)
             channel = await _channel_for_session(pg_pool, session_id)
             channel_user_id = await _channel_user_id_for_session(pg_pool, session_id)
@@ -210,17 +132,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "event_ttl_days": settings.memory.event_ttl_days,
     }
 
-    from backend.v.agents.emotion import (
-        HttpEmotionDetector,
-        KeywordEmotionDetector,
-    )
-
-    emotion_detector = (
-        HttpEmotionDetector(settings.memory.emotion_service_url)
-        if settings.memory.emotion_service_url
-        else KeywordEmotionDetector()
-    )
-
     handler = make_bus_handler(
         graph=graph,
         pool=pg_pool,
@@ -241,8 +152,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         token_model=settings.llm.main_primary,
         consolidate_callable=consolidate_session,
         consolidate_ctx=consolidate_ctx,
-        emotion_detector=emotion_detector,
-        emotion_threshold=settings.memory.emotion_threshold,
     )
 
     consumer = BusConsumer(
@@ -252,7 +161,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     consumer_task = asyncio.create_task(consumer.run(handler))
 
-    # Publish handles for routers + tests.
     app.state.settings = settings
     app.state.pg_pool = pg_pool
     app.state.redis = redis
@@ -260,29 +168,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.bus_producer = producer
     app.state.bus_consumer = consumer
     app.state.bus_consumer_task = consumer_task
-    app.state.debouncer = debouncer
-    app.state.wecom_outbound = wecom_outbound
-    app.state.feishu_outbound = feishu_outbound
     app.state.slack_outbound = slack_outbound
     app.state.pg_ckpt = pg_ckpt
     app.state.graph = graph
     app.state.llm_caller = llm_caller
-    app.state.mcp_registry = mcp_registry
-
-    # Mount channel routers now that adapters are constructed.
-    if wecom_enabled:
-        app.include_router(build_wecom_router(settings.wecom, wecom_crypto, debouncer))
-        _log.info("app.channels.wecom.enabled")
-    if feishu_enabled:
-        app.include_router(build_feishu_router(settings.feishu, feishu_crypto, debouncer))
-        _log.info("app.channels.feishu.enabled")
 
     try:
         yield
     finally:
         _log.info("app.shutdown")
         await consumer.stop()
-        await debouncer.shutdown()
         consumer_task.cancel()
         try:
             await consumer_task
@@ -290,11 +185,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             pass
         if slack_outbound is not None:
             await slack_outbound.aclose()
-        if wecom_outbound is not None:
-            await wecom_outbound.aclose()
-        if feishu_outbound is not None:
-            await feishu_outbound.aclose()
-        await mcp_registry.aclose()
         await exit_stack.aclose()
         await close_client(redis)
         await close_pool(pg_pool)
@@ -324,10 +214,7 @@ def create_app() -> FastAPI:
     """Construct the FastAPI app. Kept as a factory so tests can build their own."""
     app = FastAPI(
         title="v-agent-platform",
-        description=(
-            "External customer-service agent platform over WeCom + Feishu (Phase-1) "
-            "with Slack-mediated human handoff (Phase-2 P0)."
-        ),
+        description="External customer-service agent platform over WeCom 智能机器人 WebSocket.",
         lifespan=lifespan,
     )
     app.add_middleware(RequestIdMiddleware)

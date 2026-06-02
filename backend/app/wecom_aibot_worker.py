@@ -28,9 +28,9 @@ import signal
 from backend.app.bus.messages import SystemMessage
 from backend.app.bus.producer import BusProducer
 from backend.app.bus.shard import RedisStreamShard
-from backend.app.channels.debounce import Debouncer
-from backend.app.channels.wecom_aibot.client import WecomAibotClient
 from backend.app.store import close_client, create_client
+from backend.app.wecom_aibot.client import WecomAibotClient
+from backend.app.wecom_aibot.debounce import Debouncer
 from backend.v.configs import get_settings
 from backend.v.utils.logging import configure as configure_logging
 from backend.v.utils.logging import get_logger

@@ -1,4 +1,4 @@
-"""Unit tests for ``backend.app.channels.wecom_aibot.outbound``."""
+"""Unit tests for ``backend.app.wecom_aibot.outbound``."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 import fakeredis.aioredis
 import pytest
 
-from backend.app.channels.wecom_aibot.outbound import WecomAibotOutbound
+from backend.app.wecom_aibot.outbound import WecomAibotOutbound
 
 
 @pytest.fixture

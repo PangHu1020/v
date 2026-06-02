@@ -1,4 +1,4 @@
-"""Unit tests for ``backend.app.channels.wecom_aibot.client``.
+"""Unit tests for ``backend.app.wecom_aibot.client``.
 
 The WebSocket transport itself is mocked (we don't stand up a real WS
 server). These tests cover the cmd-keyed wire protocol:
@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, MagicMock
 
-from backend.app.channels.wecom_aibot.client import WecomAibotClient
+from backend.app.wecom_aibot.client import WecomAibotClient
 
 
 def _make_client(debouncer: AsyncMock | MagicMock | None = None) -> WecomAibotClient:

@@ -58,7 +58,7 @@ import websockets
 from websockets.asyncio.client import ClientConnection
 
 from backend.app.bus.messages import SystemMessage
-from backend.app.channels.debounce import Debouncer
+from backend.app.wecom_aibot.debounce import Debouncer
 from backend.v.utils.logging import get_logger
 
 _log = get_logger("channels.wecom_aibot.client")

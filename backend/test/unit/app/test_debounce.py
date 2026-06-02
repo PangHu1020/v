@@ -1,4 +1,4 @@
-"""Unit tests for ``backend.app.channels.debounce``.
+"""Unit tests for ``backend.app.wecom_aibot.debounce``.
 
 Validates that bursts of messages from the same identity collapse into one
 dispatch, that distinct identities are independent, and that the merged
@@ -14,7 +14,7 @@ import fakeredis.aioredis
 import pytest
 
 from backend.app.bus.messages import SystemMessage
-from backend.app.channels.debounce import Debouncer
+from backend.app.wecom_aibot.debounce import Debouncer
 
 
 @pytest.fixture
