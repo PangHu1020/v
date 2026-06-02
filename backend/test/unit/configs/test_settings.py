@@ -8,7 +8,6 @@ from backend.v.configs.base import (
     AppSettings,
     BusSettings,
     EmbeddingSettings,
-    FeishuSettings,
     LLMSettings,
     MemorySettings,
     RuntimeSettings,
@@ -102,13 +101,6 @@ class TestChannelSettings:
         settings = _no_env_file(WecomSettings)
         assert settings.corp_id == "ww123"
         assert settings.aes_key == "abc" * 14
-
-    def test_feishu_prefix(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("FEISHU_APP_ID", "cli_app")
-        monkeypatch.setenv("FEISHU_VERIFICATION_TOKEN", "tok")
-        settings = _no_env_file(FeishuSettings)
-        assert settings.app_id == "cli_app"
-        assert settings.verification_token == "tok"
 
 
 class TestAppSettings:

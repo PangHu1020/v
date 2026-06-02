@@ -1,17 +1,11 @@
-"""Intent classification + reflection nodes (Phase-3 Group E).
+"""Intent classification + reflection nodes.
 
-**Intent node** — a cheap LLM call (flash tier) that classifies the
-customer's latest message into one of four intents. The result is stored
-in ``state["intent"]`` so ``enter_node`` can inject the matching SOP
-section and ``route_after_intent`` can direct the turn to the right
-agent variant.
+**Intent node** — cheap LLM call (flash tier) that classifies the
+customer's latest message into one of four intents.
 
 **Reflection node** — after the agent produces a reply, checks whether
-the reply references facts that are NOT present in any ToolMessage from
-this turn (the most common hallucination pattern in e-commerce CS). If
-the check fails the node sets ``state["reflection_retries"] += 1`` and
-routes back to ``agent``; after two failed retries it passes through
-unconditionally.
+it references facts NOT present in any ToolMessage from this turn.
+Retries up to ``MAX_REFLECTION_RETRIES`` times before passing through.
 """
 
 from __future__ import annotations
@@ -23,7 +17,6 @@ from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 
-from backend.v.agents.emotion import EmotionDetector
 from backend.v.agents.prompts import INTENT_SYSTEM_PROMPT, REFLECTION_SYSTEM_PROMPT
 from backend.v.agents.state import CustomerServiceState
 from backend.v.models.llm_caller import LLMCaller
@@ -33,8 +26,6 @@ _log = get_logger("agents.intent_reflect")
 
 MAX_REFLECTION_RETRIES = 2
 
-# ── Intent classification ────────────────────────────────────────────────────
-
 Intent = Literal["refund", "logistics", "complaint", "general"]
 
 
@@ -43,21 +34,11 @@ class IntentResult(BaseModel):
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
-_INTENT_SYSTEM = INTENT_SYSTEM_PROMPT
-
-
 async def intent_node(
     state: CustomerServiceState,
     config: RunnableConfig,
 ) -> dict[str, Any]:
-    """Classify the customer's intent; pre-empt to handoff if very angry.
-
-    If an :class:`EmotionDetector` is provided via
-    ``config["configurable"]["emotion_detector"]`` AND the customer's
-    latest message exceeds the ``emotion_threshold`` (also in config,
-    default 0.80), this node sets ``force_handoff=True`` immediately so
-    ``agent_node`` injects ``transfer_to_human`` without calling the LLM.
-    """
+    """Classify the customer's latest message into one of four intents."""
     cfg = config.get("configurable", {}) if config else {}
     caller: LLMCaller | None = cfg.get("llm_caller")
     if caller is None:
@@ -65,7 +46,6 @@ async def intent_node(
 
     started = time.perf_counter()
     messages = state.get("messages", [])
-    # Find the latest HumanMessage text.
     latest_text = ""
     for m in reversed(messages):
         if not isinstance(m, (SystemMessage, AIMessage, ToolMessage)):
@@ -74,24 +54,10 @@ async def intent_node(
     if not latest_text:
         return {"intent": "general"}
 
-    # ── Emotion pre-emption (before LLM call, so no tokens burned) ──────────
-    detector: EmotionDetector | None = cfg.get("emotion_detector")
-    if detector is not None:
-        from backend.v.agents.emotion import should_preempt_handoff
-
-        threshold = float(cfg.get("emotion_threshold", 0.80))
-        try:
-            if await should_preempt_handoff(latest_text, detector=detector, threshold=threshold):
-                _log.info("intent_node.emotion_preempt")
-                return {"intent": "complaint", "force_handoff": True}
-        except Exception as exc:
-            _log.warning("intent_node.emotion_failed", error=type(exc).__name__)
-    # ────────────────────────────────────────────────────────────────────────
-
     from langchain_core.messages import HumanMessage
 
     prompt = [
-        SystemMessage(content=_INTENT_SYSTEM),
+        SystemMessage(content=INTENT_SYSTEM_PROMPT),
         HumanMessage(content=f"<message>\n{latest_text}\n</message>"),
     ]
     try:
@@ -110,15 +76,9 @@ async def intent_node(
     return {"intent": ir.intent}
 
 
-# ── Reflection ───────────────────────────────────────────────────────────────
-
-
 class ReflectionResult(BaseModel):
     passes: bool = True
     issues: list[str] = Field(default_factory=list)
-
-
-_REFLECT_SYSTEM = REFLECTION_SYSTEM_PROMPT
 
 
 def _collect_tool_facts(messages: list) -> str:
@@ -165,7 +125,7 @@ async def reflection_node(
     from langchain_core.messages import HumanMessage
 
     prompt = [
-        SystemMessage(content=_REFLECT_SYSTEM),
+        SystemMessage(content=REFLECTION_SYSTEM_PROMPT),
         HumanMessage(
             content=(
                 f"<tool_facts>\n{tool_facts}\n</tool_facts>\n\n<ai_reply>\n{reply}\n</ai_reply>"

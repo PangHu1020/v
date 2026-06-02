@@ -64,4 +64,6 @@ class TestGetEmbedding:
         emb = get_embedding(llm_settings, embedding_settings)
         assert isinstance(emb, OpenAIEmbeddings)
         assert emb.model == "Qwen3-Embedding-0.6B"
-        assert emb.dimensions == 1024
+        # DashScope rejects the `dimensions` param via the OpenAI-compatible endpoint
+        # so factory.get_embedding deliberately omits it (always returns 1024-dim vectors).
+        assert emb.dimensions is None

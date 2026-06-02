@@ -77,13 +77,9 @@ def _make_guarded_tools_node(bound_tools: list[Any]):
     return _guarded
 
 
-def build_graph(
-    checkpointer: BaseCheckpointSaver,
-    *,
-    extra_tools: list[Any] | None = None,
-):
+def build_graph(checkpointer: BaseCheckpointSaver):
     """Compile the agent graph with intent routing + reflection."""
-    bound_tools = list(AGENT_TOOLS) + list(extra_tools or [])
+    bound_tools = list(AGENT_TOOLS)
 
     async def _agent(state: CustomerServiceState, config: RunnableConfig) -> dict[str, Any]:
         return await agent_node(state, config, tools=bound_tools)

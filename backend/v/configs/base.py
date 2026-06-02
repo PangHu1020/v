@@ -119,11 +119,8 @@ class MemorySettings(BaseSettings):
     """When compression fires, how many trailing messages to keep verbatim
     (so the agent still has the immediate exchange in full fidelity)."""
     emotion_threshold: float = Field(default=0.80, ge=0.0, le=1.0)
-    """Anger/frustration score above which the graph skips the LLM and
-    pre-empts directly to transfer_to_human. Set to 1.0 to disable."""
-    emotion_service_url: str = ""
-    """HTTP endpoint for a remote emotion BERT model. Empty means the in-
-    process keyword scorer is used instead (Phase-3 Group F default)."""
+    """Removed emotion preemption — kept field so existing .env files don't error.
+    Set to 1.0 to disable (always false). Scheduled for removal."""
 
 
 class BusSettings(BaseSettings):
@@ -172,17 +169,6 @@ class WecomAibotSettings(BaseSettings):
     outbound_pubsub_channel: str = "wecom_aibot:outbound"
 
 
-class FeishuSettings(BaseSettings):
-    """Feishu (飞书) customer-side webhook credentials."""
-
-    model_config = SettingsConfigDict(**_COMMON, env_prefix="FEISHU_")
-
-    app_id: str = ""
-    app_secret: str = ""
-    encrypt_key: str = ""
-    verification_token: str = ""
-
-
 class SlackSettings(BaseSettings):
     """Slack operator-side adapter credentials and target channel.
 
@@ -199,24 +185,6 @@ class SlackSettings(BaseSettings):
     @property
     def enabled(self) -> bool:
         return bool(self.bot_token and self.signing_secret and self.handoff_channel_id)
-
-
-class MCPSettings(BaseSettings):
-    """Model Context Protocol client configuration (Phase-2 P1).
-
-    ``servers_json`` is a JSON-encoded list of server configs; each entry
-    matches :class:`MCPServerConfig`. Empty list disables MCP entirely.
-
-    Cache TTLs apply to non-write tool results; write-class tools
-    (declared per-server in ``write_tools``) skip the cache.
-    """
-
-    model_config = SettingsConfigDict(**_COMMON, env_prefix="MCP_")
-
-    servers_json: str = "[]"
-    cache_l1_ttl_seconds: int = Field(default=300, ge=0)
-    cache_l2_ttl_seconds: int = Field(default=86400, ge=0)
-    call_timeout_seconds: int = Field(default=30, ge=1)
 
 
 class ARQSettings(BaseSettings):
@@ -270,9 +238,7 @@ class AppSettings(BaseModel):
     bus: BusSettings
     wecom: WecomSettings
     wecom_aibot: WecomAibotSettings
-    feishu: FeishuSettings
     slack: SlackSettings
-    mcp: MCPSettings
     arq: ARQSettings
     skill: SkillSettings
     langsmith: LangSmithSettings
@@ -296,9 +262,7 @@ def get_settings() -> AppSettings:
         bus=BusSettings(),
         wecom=WecomSettings(),
         wecom_aibot=WecomAibotSettings(),
-        feishu=FeishuSettings(),
         slack=SlackSettings(),
-        mcp=MCPSettings(),
         arq=ARQSettings(),
         skill=SkillSettings(),
         langsmith=LangSmithSettings(),
