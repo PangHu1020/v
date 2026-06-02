@@ -152,18 +152,22 @@ CLAUDE.md 明确规定：bus 仅 reactive-inbound。直接走 channel adapter �
 - 同一会话回执必然在同一 worker（per-shard 串行），无需额外排队。
 - 失败语义直接：`send_text` 抛出 → handler 落 DLQ。
 
-### 2.4 工具调用循环（Phase-2 P0+P1+P3 后）
+### 2.4 工具调用循环（Phase-2 P0+P1+P3 + Phase-3 G 后）
 
-`agent_node` 给 LLM 绑定的工具列表 = `[transfer_to_human, recall_memory, subagent, *mcp_tools]`，绑定方式见 `LLMCaller.chat(role, msgs, tools=...)`。LLM 输出 `AIMessage(tool_calls=[...])` 时，`route_after_agent` 路由到 `ToolNode`，`ToolNode` 用同一份工具列表分发执行，工具结果作为 `ToolMessage` 写回 state，再回到 `agent`。直到 LLM 不再产出 tool_calls 才退出 → `exit`。
+`agent_node` 给 LLM 绑定的工具列表 = `[calculator, search, recall_memory, subagent, transfer_to_human, *mcp_tools]`，绑定方式见 `LLMCaller.chat(role, msgs, tools=...)`。LLM 输出 `AIMessage(tool_calls=[...])` 时，`route_after_agent` 路由到 `ToolNode`，`ToolNode` 用同一份工具列���分发执行，工具结果作为 `ToolMessage` 写回 state，再回到 `agent`。直到 LLM 不再产出 tool_calls 才退出 → `exit`。
 
-工具说明：
+工具说明（Phase-3 G 完整列表）：
 
-| 工具 | 行为 |
-| --- | --- |
-| `transfer_to_human(reason)` | 调用 `langgraph.types.interrupt({"type": "transfer_to_human", "reason": ...})`，**suspend 整个图** |
-| `recall_memory(query, top_k=5)` | 走 pgvector cosine + 时间衰减重排（half_life=30d）召回 episodes |
-| `subagent(task, context_mode=...)` | 单轮 LLM 子任务调用；shared 模式带父 messages 末尾 10 条 |
-| `{server_id}__{tool}` | MCP 工具，结果走 L1+L2 缓存（写类按配置 opt-out） |
+| 工具 | 行为 | 实现 |
+| --- | --- | --- |
+| `calculator(expr)` | 安全 AST 求值（白名单算子，exponent ≤ 64，结果 ≤ 1e18） | [backend/v/tools/calculator.py](../backend/v/tools/calculator.py) |
+| `search(query, top_k=5, source_type=None)` | 语义召回 `agent.knowledge_chunk` (pgvector cosine)，可选 `source_type` 过滤 | [backend/v/tools/search.py](../backend/v/tools/search.py) |
+| `recall_memory(query, top_k=5)` | 召回该客户的 `agent.event_memory` (pgvector cosine + 时间衰减重排，half_life=30d) | [backend/v/tools/recall_memory.py](../backend/v/tools/recall_memory.py) |
+| `subagent(task, context_mode=...)` | 单轮 LLM 子任务调用；shared 模式带父 messages 末尾 10 条 | [backend/v/tools/subagent.py](../backend/v/tools/subagent.py) |
+| `transfer_to_human(reason)` | 调用 `langgraph.types.interrupt({"type": "transfer_to_human", "reason": ...})`，**suspend 整个图** | [backend/v/tools/transfer_to_human.py](../backend/v/tools/transfer_to_human.py) |
+| `{server_id}__{tool}` | MCP 工具，结果走 L1(5min)+L2(24h) 缓存（写类按配置 opt-out） | [backend/v/mcp/](../backend/v/mcp/) |
+
+所有工具使用 `@tool(parse_docstring=True)`，docstring 即 LLM 可见的工具描述（单一真相源）。
 
 ### 2.5 WeCom 智能机器人 WS 变体（Phase-3 G）
 
@@ -324,43 +328,255 @@ INSERT agent.    GET 命中             session 键自然过期    （+ 长记�
 - 同一会话内 N 条消息，被 debouncer 合并前已经顺序串行；合并后只有 1 条进 bus。
 - 跨会话 / 跨用户消息互相独立。
 
-## 7. 记忆分层（Phase-2 P3 后完整）
+## 7. 记忆分层与异步提取（Phase-3 Group C/H 完整）
+
+### 7.1 三层记忆架构
 
 ```
-┌────────────────── Working Memory ──────────────────┐
-│ Redis  ckpt:{thread_id}  TTL=1800s                 │  ← LangGraph state（热路径）
-│ Redis  profile:{ch}:{u}  TTL=1800s                 │  ← user_profile 缓存
-│ Redis  session:{ch}:{u}  TTL=3600s                 │  ← 当前 session_id
-│ Redis  last_seen:{ch}:{u} TTL=3600s                │  ← 静默判断
-│ Redis  session_status:{session_id}                 │  ← active / suspended（P2 P0）
-│ Redis  proactive_log:{ch}:{u} TTL=30d              │  ← 主动消息历史（P2 P2）
-│ Redis  operator_log:{session_id} TTL=7d            │  ← 人工回复缓存（P2 P0）
-└────────────────────────────────────────────────────┘
-       ▼ on_interrupt: 整 thread 迁移
-┌──────────── Cold Working Memory ────────────┐
-│ PG  agent.checkpoints + checkpoint_blobs    │  ← 由 langgraph 官方 saver 管理
-│     + checkpoint_writes + checkpoint_       │     仅 suspended 期间使用
-│       migrations                            │
-└─────────────────────────────────────────────┘
-       ▼ consolidate_session（hook 触发 ARQ）
-┌─────────────── Session Memory ──────────────┐
-│ PG  agent.session_memory                    │  ← LLM 总结 + 结构化 metadata
-│     summary, token_count, metadata JSONB    │     (intents/key_facts/sentiment/unresolved)
-└─────────────────────────────────────────────┘
-       ▼ extract_session_memory（链式 ARQ）
-┌────────────── Long-term Memory ─────────────┐
-│ PG  agent.user_profile  PK (ch, user_id)    │  ← 结构化偏好（LLM 合并）
-│ PG  agent.memory_episodes  vector(1024)     │  ← Qwen embedding，HNSW cosine
-│     + importance + tags + last_accessed_at  │     recall_memory 时间衰减召回
-└─────────────────────────────────────────────┘
+┌────────────────── Working Memory (热路径) ──────────────────┐
+│ Redis  ckpt:{thread_id}         TTL=1800s                   │  ← LangGraph checkpointer
+│ Redis  working:{session_id}     TTL=1800s                   │  ← 本会话待提取的记忆条目 (MemoryEntry[])
+│ Redis  profile:{ch}:{u}         TTL=1800s                   │  ← user_profile 缓存
+│ Redis  session:{ch}:{u}         TTL=3600s                   │  ← 当前 session_id
+│ Redis  last_seen:{ch}:{u}       TTL=3600s                   │  ← 静默判断
+│ Redis  session_status:{s_id}                                │  ← active / suspended
+│ Redis  proactive_log:{ch}:{u}   TTL=30d                     │  ← 主动消息历史
+│ Redis  operator_log:{s_id}      TTL=7d                      │  ← 人工回复缓存
+└──────────────────────────────────────────────────────────────┘
+       ▼ on_interrupt: 整 thread 迁移 (transfer_to_human 触发)
+┌──────────── Cold Checkpointer (挂起期间) ───────��────┐
+│ PG  agent.checkpoints + checkpoint_blobs            │  ← LangGraph 官方 PostgresSaver
+│     + checkpoint_writes + checkpoint_migrations     │     仅 suspended session 使用
+└──────────────────────────────────────────────────────┘
+       ▼ consolidate_session (ARQ 延时任务，context 阈值 / TTL 临近时触发)
+┌─────────────── Event Memory (中期，30 天) ────────────��─┐
+│ PG  agent.event_memory                                  │  ← 一行 = 一条可召回的记忆片段
+│     content TEXT, embedding vector(1024), expires_at   │     Qwen text-embedding-v3, HNSW cosine
+│     importance, tags[], created_at                      │     recall_memory 工具按 cosine * exp(-age/30d) 召回
+└──────────────────────────────────────────────────────────┘
+       ▼ promote_to_long_term (会话结束时一次性，读 working → 写 profile + event)
+┌────────────── Long-term Memory (永久，去重合并) ─────────────┐
+│ PG  agent.user_profile  PK (channel, channel_user_id)      │  ← 结构化偏好 (JSONB)
+│     customer_name, preferred_language, member_level, ...   │     on_session_start 全量注入 SystemMessage
+│     + extras {}, notes TEXT                                 │
+│ PG  agent.knowledge_chunk  vector(1024)                     │  ← 共享知识语料库（产品 / FAQ / 政策）
+│     (source_type, source_id) UNIQUE, HNSW cosine           │     search 工具语义召回，无 recency 权重
+└─────────────────────────────────────────────────────────────┘
 ```
 
-抽取链特性：
+### 7.2 异步记忆提取流程详解
 
-- `consolidate_session` 用 LLM（DeepSeek flash）+ Pydantic structured output 产出 `SessionSummary{narrative, intents, key_facts, sentiment, unresolved}`。
-- `extract_session_memory` 接力，再调 LLM 输入 (existing_profile, session_summary) → output (merged_profile, episodes[])。**LLM 直接产出"合并后的完整 profile"**，避免在代码里写合并规则。
-- episodes 用 Qwen `text-embedding-v4` 向量化（1024-dim Matryoshka，与 `pgvector(1024)` 列对齐）。
-- 召回时按 `cosine_similarity * exp(-age_days / 30)` 重排，30 天半衰期。
+记忆提取分为**两阶段**，均由 ARQ 后台任务驱动，与主对话流程完全解耦：
+
+#### 阶段一：consolidate_session（会话活跃期的增量提取）
+
+**触发时机**（三选一，哪个先到触发哪个）：
+1. **Context 阈值**：`on_context_threshold` hook 检测到 checkpointer 中 messages 数 ≥ 配置阈值（默认 30 条）。
+2. **TTL 临近**：session last_seen 距离 TTL（1800s）还剩 Δ 时间时（如剩 300s），提前触发。
+3. **会话结束**：`on_session_end` hook（目前未实现独立 hook，等同于 30 min 静默后下次新消息到达时检测）。
+
+**实现路径**：
+```
+hooks/某处 → ctx["arq_pool"].enqueue(
+    "consolidate_session",
+    session_id=session_id,
+    defer_by=timedelta(seconds=...),  # TTL 临近时有 defer，context 阈值时立即
+)
+```
+
+**执行逻辑**（[backend/v/cron/tasks/consolidate_session.py](../backend/v/cron/tasks/consolidate_session.py)）：
+```python
+async def consolidate_session(ctx, *, session_id):
+    # 1. 读取 Redis checkpointer 中的完整 messages 历史
+    checkpointer = RedisCheckpointer(redis, session_id)
+    messages = await checkpointer.aget_tuple(config)
+    transcript = _format_history(messages)  # 转纯文本对话记录
+
+    # 2. 调 LLM（DeepSeek v4 flash）+ Pydantic structured output
+    result: ExtractionResult = await llm_caller.chat(
+        "summary", prompt, structured=ExtractionResult
+    )
+    # ExtractionResult = {
+    #   profile_updates: dict,        # 本阶段**忽略**（留给 promote_to_long_term）
+    #   working_memories: [MemoryEntry],  # 短期工作记忆，写 Redis
+    #   event_memories: [MemoryEntry],    # 中期事件记忆，写 PG + embed
+    # }
+
+    # 3. 双写：
+    # 3a. working_memories → Redis list working:{session_id} (TTL 1800s)
+    for entry in result.working_memories:
+        await append_working_memory(redis, session_id, entry)
+
+    # 3b. event_memories → agent.event_memory (带 embedding)
+    #     每条 content 调 embedder.aembed_documents([content])
+    #     INSERT ... expires_at = now() + 30 days
+    events_inserted = await insert_event_memories(
+        pool, channel, channel_user_id, session_id,
+        result.event_memories, embedder
+    )
+
+    # 4. 标记会话 status='consolidated'（幂等）
+    await conn.execute(
+        "UPDATE agent.session SET status='consolidated' WHERE session_id=$1",
+        session_id
+    )
+    return {"working_inserted": len(result.working_memories), "events_inserted": events_inserted}
+```
+
+**关键特性**：
+- `working_memories` 是**临时便签**：供本会话后续轮次快速访问，TTL 与 session 同步过期。
+- `event_memories` 是**持久记忆**：30 天 TTL，可被 `recall_memory` 工具跨会话召回，每条带 `embedding vector(1024)` + `importance` + `tags[]`。
+- `profile_updates` 在这一阶段**被忽略**——会话活跃时不修改 user_profile，避免频繁写冲突和中间态污染。
+
+#### 阶段二：promote_to_long_term（会话结束后的终局合并）
+
+**触发时机**：
+会话彻底结束（30 分钟静默后，Redis working memory 自然过期）时，由外部逻辑（目前可能是手动触发或更上层的 session closer）调用。
+
+**实现路径**：
+```
+某处检测到 session 已 consolidated 且已过期 →
+ctx["arq_pool"].enqueue("extract_session_memory", session_id=...)
+# extract_session_memory 是 promote_to_long_term 的别名
+```
+
+**执行逻辑**（[backend/v/memory/memory_extractor.py](../backend/v/memory/memory_extractor.py)）：
+```python
+async def promote_to_long_term(ctx, *, session_id):
+    # 1. 读取身份
+    channel, channel_user_id = await _read_session_identity(pool, session_id)
+
+    # 2. 读取 Redis working:{session_id} 中的所有 MemoryEntry
+    working = await read_working_memory(redis, session_id)
+    if not working:
+        return None  # 无内容，幂等退出
+
+    # 3. 读取现有 user_profile
+    existing = await _read_existing_profile(pool, channel, channel_user_id)
+
+    # 4. 调 LLM（DeepSeek v4 flash）做**合并决策**
+    prompt = [
+        SystemMessage(LONG_TERM_PROMOTION_SYSTEM_PROMPT),
+        HumanMessage(f"<existing_profile>{json(existing)}</existing_profile>\n"
+                     f"<working_memory>{json(working)}</working_memory>")
+    ]
+    result: ExtractionResult = await llm_caller.chat(
+        "memory_extract", prompt, structured=ExtractionResult
+    )
+    # 这次的 ExtractionResult:
+    #   profile_updates: dict,  ← **这次会用**，LLM 输出"合并后的完整 profile"
+    #   event_memories: [MemoryEntry],  ← 额外的长期记忆片段（去重后的）
+
+    # 5. 合并 profile（代码层浅合并 + LLM 输出深合并）
+    merged = _merge_profile(existing, result.profile_updates)
+    if merged != existing:
+        await conn.execute(
+            """INSERT INTO agent.user_profile (channel, channel_user_id, profile)
+               VALUES ($1, $2, $3)
+               ON CONFLICT (channel, channel_user_id) DO UPDATE
+                 SET profile = EXCLUDED.profile, updated_at = now()""",
+            channel, channel_user_id, merged
+        )
+
+    # 6. event_memories 再次 embed + INSERT（去重：UNIQUE (source_type, source_id) 或内容哈希）
+    events_inserted = await insert_event_memories(...)
+
+    # 7. 删除 Redis working:{session_id}（已提取完毕，避免重复处理）
+    await delete_working_memory(redis, session_id)
+
+    return {"profile_updated": 1 if merged != existing else 0, "events_inserted": events_inserted}
+```
+
+**关键特性**：
+- **LLM 产出合并后的完整 profile**：不在代码里写 if-else 合并规则，而是让 LLM 理解语义冲突（如"偏好顺丰" vs "最近改用京东"），产出最新的正确状态。
+- **去重 + 过时标记**：`_merge_profile` 逻辑 + LLM prompt 明确要求"conflict → recency wins; obsolete info → drop"。
+- **event_memories 二次提取**：从 working memory 中进一步筛选**跨会话仍有价值的条目**（如投诉记录、特殊需求），写入 30 天 TTL 的 event_memory。
+- **幂等性**：working memory 一旦删除，重跑 promote_to_long_term 立即返回 None。
+
+### 7.3 召回路径
+
+**on_session_start**（每轮开始前）：
+```python
+profile = await read_user_profile(pool, channel, channel_user_id)
+# → 全量注入 <customer_profile> 到 SystemMessage
+
+recent_events = await read_recent_event_memories(pool, channel, channel_user_id, limit=5)
+# → <recent_events> 注入（最近 5 条，按 created_at DESC）
+
+working_memory = await read_working_memory(redis, session_id)
+# → <working_memory> 注入（本会话累积的临时记忆）
+```
+
+**recall_memory 工具**（主动召回）：
+```python
+@tool("recall_memory", parse_docstring=True)
+async def recall_memory(query: str, config: RunnableConfig) -> str:
+    pool, embedder = config["configurable"]["pg_pool"], config["configurable"]["embedder"]
+    query_vec = await embedder.aembed_query(query)
+    rows = await conn.fetch(
+        """SELECT content, created_at, importance, tags,
+                  embedding <=> $1::vector AS distance
+           FROM agent.event_memory
+           WHERE channel=$2 AND channel_user_id=$3 AND expires_at > now()
+           ORDER BY distance LIMIT $4""",
+        query_vec, channel, channel_user_id, top_k
+    )
+    # 时间衰减重排：score = (1 - distance) * exp(-age_days / 30)
+    # 返回 top_k 条格式化文本
+```
+
+**search 工具**（知识库召回，与客户无关）：
+```python
+@tool("search", parse_docstring=True)
+async def search(query: str, top_k: int = 5, source_type: str | None = None) -> str:
+    query_vec = await embedder.aembed_query(query)
+    if source_type:
+        sql = "... WHERE source_type=$2 ORDER BY embedding <=> $1::vector LIMIT $3"
+        rows = await conn.fetch(sql, query_vec, source_type, top_k)
+    else:
+        sql = "... ORDER BY embedding <=> $1::vector LIMIT $2"
+        rows = await conn.fetch(sql, query_vec, top_k)
+    # 返回 "[source_type:source_id] text" 格式，无 recency 权重
+```
+
+### 7.4 完整时序图
+
+```
+T0        客户首条消息 → mint session_id → on_session_start (profile + recent_events 注入)
+T0+30s    agent 调工具、回复 → working memory 无感写入 Redis (暂不触发提取)
+T0+5min   第 15 轮对话 → messages 数达阈值 30 → on_context_threshold hook
+              → enqueue consolidate_session(session_id, defer_by=0)
+T0+5min+2s ARQ worker 执行 consolidate_session:
+              - LLM 总结前 15 轮 → working_memories (3 条) + event_memories (1 条)
+              - Redis RPUSH working:{s_id} × 3
+              - PG INSERT agent.event_memory × 1 (embed + expires_at=now()+30d)
+              - UPDATE session status='consolidated'
+T0+10min  继续对话，working memory 累积到 5 条（3 条来自上次提取 + 2 条新增）
+T0+30min  客户静默，Redis ckpt + working 键自然过期（TTL 1800s）
+T0+35min  外部 closer 检测到 session 已 consolidated 且过期
+              → enqueue extract_session_memory(session_id)
+T0+35min+3s ARQ worker 执行 promote_to_long_term:
+              - 读 Redis working:{s_id}（5 条）+ PG existing profile
+              - LLM 合并决策 → profile_updates (dw_customer_id, preferred_courier 更新)
+                             → event_memories (1 条额外长期记忆)
+              - UPSERT agent.user_profile
+              - INSERT agent.event_memory × 1
+              - DEL Redis working:{s_id}（清理完毕）
+T0+60min  客户再次发消息 → mint 新 session_id
+              → on_session_start 读到刚才更新的 profile + 前面写入的 2 条 event_memory
+              → LangGraph 继承了上一会话的"记忆"，但 working memory 是全新的空列表
+```
+
+### 7.5 设计权衡
+
+| 维度 | 决策 | 理由 |
+| --- | --- | --- |
+| **为何两阶段？** | consolidate 活跃期增量，promote 结束后终局 | 避免活跃期频繁写 profile 造成冲突；终局时 LLM 可以看到完整会话做最优合并 |
+| **working memory 为何在 Redis？** | TTL 自动过期 + 与 session 同生命周期 | 无需手动清理；会话结束后这些临时记忆自然消失，不污染长期存储 |
+| **event_memory 30 天 TTL** | 平衡召回价值与存储成本 | 多数客服场景，1 个月前的具体对话细节已无召回价值；profile 保留结构化要点 |
+| **profile_updates 为何延迟到 promote？** | 减少并发写、避免中间态 | 会话中客户可能改口（"顺丰" → "算了还是京东"），等会话结束再由 LLM 产出最终态 |
+| **LLM 负责合并而非代码？** | 语义冲突只有 LLM 能理解 | "客户说不吃辣" vs "今天点了麻辣锅" → LLM 判断是临时例外还是偏好变更 |
+| **recall_memory 与 search 分离？** | 一个查客户历史，一个查共享知识 | recall 带 recency decay（旧事件权重低），search 不带（产品信息无新旧）|
 
 ## 8. MCP 工具调用流（Phase-2 P1）
 

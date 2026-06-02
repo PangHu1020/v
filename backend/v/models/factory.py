@@ -46,10 +46,14 @@ def get_embedding(
     settings: LLMSettings,
     embedding: EmbeddingSettings,
 ) -> OpenAIEmbeddings:
-    """Construct an ``OpenAIEmbeddings`` against the Qwen endpoint."""
+    """Construct an ``OpenAIEmbeddings`` against the Qwen endpoint.
+
+    Note: DashScope's text-embedding-v3 does not support the `dimensions`
+    parameter via the OpenAI-compatible endpoint; it always returns 1024-dim
+    vectors. The parameter is omitted to avoid 400 errors.
+    """
     return OpenAIEmbeddings(
         model=embedding.model,
         base_url=settings.base_url_qwen or None,
         api_key=SecretStr(settings.api_key_qwen) if settings.api_key_qwen else None,
-        dimensions=embedding.dim,
     )
