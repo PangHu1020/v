@@ -79,19 +79,7 @@ handler 由 [backend/app/bus/worker.py:make_bus_handler](../backend/app/bus/work
 
 [backend/app/bus/worker.py:_resolve_session_id](../backend/app/bus/worker.py) — 30 分钟以内复用，否则 mint UUID + INSERT `agent.session`。
 
-### 5.2 挂起检查
-
-[backend/v/hooks/handoff.py:is_suspended](../backend/v/hooks/handoff.py)
-
-```python
-if handoff_enabled and await is_suspended(session_id, redis=redis):
-    thread_ts = await slack_outbound.get_thread_for_session(session_id)
-    if thread_ts:
-        await slack_outbound.post_customer_message(thread_ts=thread_ts, text=msg.text)
-    return  # ← 不调 graph
-```
-
-### 5.3 加载 user_profile
+### 5.2 加载 user_profile
 
 [backend/v/hooks/session.py:on_session_start](../backend/v/hooks/session.py) — Redis 缓存 → PG 兜底。
 
@@ -110,16 +98,6 @@ config = {
     }
 }
 final_state = await graph.ainvoke(input_state, config=config)
-```
-
-### 5.5 Interrupt 检查
-
-[backend/v/hooks/handoff.py:extract_interrupt](../backend/v/hooks/handoff.py)
-
-```python
-if interrupt_payload := await extract_interrupt(final_state):
-    await on_interrupt(...)
-    return
 ```
 
 ---
@@ -141,13 +119,12 @@ intent_node（flash LLM）分类意图 → agent_node（primary LLM）生成回�
 
 ### 6.2 工具分支
 
-`ToolNode([calculator, search, recall_memory, subagent, transfer_to_human])`：
+`ToolNode([calculator, search, recall_memory, subagent])`：
 
 - `search(query)` → `KnowledgeRetriever.retrieve(pool, embedder, query)` → pgvector cosine over `agent.knowledge_chunk`
 - `recall_memory(query)` → pgvector cosine + 时间衰减 over `agent.event_memory`（per-customer）
 - `calculator(expr)` → 安全 AST 求值
 - `subagent(task)` → 单轮 LLM 子任务
-- `transfer_to_human(reason)` → `interrupt()` → 图暂停
 
 ### 6.3 reflection_node
 
@@ -177,43 +154,3 @@ wecom_aibot_worker 内 pub/sub task 收到 → `WecomAibotClient.send_text(...)`
 
 ---
 
-## 阶段 9（仅当阶段 5.5 命中）：人工接管
-
-[backend/v/hooks/handoff.py:on_interrupt](../backend/v/hooks/handoff.py)
-
-```
-1. migrate_hot_to_cold → Redis hash → PG checkpointer
-2. UPDATE agent.session SET status='suspended'
-3. SET session_status:{session_id}=suspended
-4. slack.post_handoff_alert → Block Kit 卡片 + Resume 按钮
-```
-
-挂起期间：客户消息 → Slack thread 转发；操作员回复 → append_operator_log + send 给客户。
-
-操作员点 Resume → `on_resume` → migrate_cold_to_hot → `Command(resume=...)` → graph.ainvoke → sends["wecom_aibot"]。
-
-详见 [data_flow.md §4](data_flow.md)。
-
----
-
-## 总结：函数调用栈深度
-
-最简单的一轮（无工具调用、无接管）大约 **15 个跨模块函数调用**。
-
-| 阶段 | 耗时（粗估） |
-| --- | --- |
-| WS frame → debounce → bus | < 10ms（帧解码） + 500ms（debounce 等待） |
-| Bus 出队 + 反序列化 | < 5ms |
-| Session resolution + on_session_start | < 10ms（缓存命中 < 1ms） |
-| LangGraph turn（含 ckpt 写） | LLM 调用占 99%（DeepSeek 通常 1-3s） |
-| Outbound pub/sub + WS 写 | < 50ms |
-
-工具调用增加：
-
-| 工具 | 增量 |
-| --- | --- |
-| `search` | embed (~50-200ms) + 一次 pgvector (~10-50ms) |
-| `recall_memory` | embed (~50-200ms) + pgvector + 时间衰减重排 (~10-50ms) |
-| `calculator` | < 1ms（纯 CPU） |
-| `subagent` | 一次额外 LLM 调用（DeepSeek flash，1-2s） |
-| `transfer_to_human` | 工具内 interrupt，`on_interrupt` 串行：迁移 + Slack 告警（~200-500ms） |

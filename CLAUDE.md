@@ -3,7 +3,6 @@ A state-driven AI agent platform for **external customer service over enterprise
 
 - **Primary mode**: reactive customer-service inquiries (被动答疑).
 - **Secondary mode**: proactive scheduled outreach (logistics notifications, ad pushes, repurchase reminders).
-- **Tertiary mode**: human handoff via LangGraph `interrupt()` with Slack as the operator-side channel.
 - **Tenancy**: single-tenant in MVP; multi-tenancy is **deferred but not blocked** (do not bake in single-tenant assumptions that would force rewrites later).
 
 As an AI developer (Claude Code) working in this monorepo, your primary objective is to maintain strict architectural boundaries and adhere to a test-driven development lifecycle.
@@ -31,14 +30,9 @@ NEVER bypass layers to create shortcuts.
 `/v/cron` (ARQ scheduled task) → calls `/v/agents` to generate context-aware message → writes to `/v/memory` (CRITICAL — proactive output is part of conversation history) → pushes to `/app/bus` → `Channel` → `Customer`.
 MVP scenarios: **logistics delivery notification**, **ad-hoc ad push**, **repurchase reminder**.
 
-**3. Human Handoff Workflow (Escalation)**
-Agent invokes `transfer_to_human` tool → LangGraph `interrupt()` suspends the graph → on-interrupt hook **migrates state from Redis (hot) to Postgres checkpointer (cold), removing TTL** → alert with conversation snapshot pushed to **Slack** via `/app/operator/slack/` → during suspension:
-- Customer's continued messages are stored as `HumanMessage` in the durable checkpointer **but do not re-enter the graph**.
-- Operator's replies (sent from Slack) are relayed to the customer via the original channel AND stored as `AIMessage` with metadata `{author_type: "human_agent", operator_id: ...}`.
-- Operator clicks the **Slack resume button** → triggers `Command(resume=...)` → on-resume hook migrates state back to Redis with fresh TTL → graph resumes with full updated history.
 
 # Project structure and corresponding functions
-- `/backend/app/`: **Shell & Gateway.** HTTP traffic, webhook signature validation, cross-platform normalization, bus ingestion, operator-side Slack adapter, infrastructure (DB/Redis) lifecycle.
+- `/backend/app/`: **Shell & Gateway.** WS frame normalization, bus ingestion, infrastructure (DB/Redis) lifecycle.
 - `/backend/v/`: **Agent Engine.** LangGraph orchestration, LLM reasoning, hierarchical memory, tools, MCP/Skill integration, model factory, cron logic.
 - `/backend/test/`: Unit + integration test suites mirroring `/app/` and `/v/`.
 - `/backend/eval/`: LLM evaluation harness (offline, not part of CI gate).

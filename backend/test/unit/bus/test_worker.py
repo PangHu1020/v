@@ -260,6 +260,3 @@ class TestHandlerEndToEnd:
 
         # Should not raise even without a registered send.
         await handler(_msg(text="hi"))
-
-
-

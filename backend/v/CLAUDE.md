@@ -9,7 +9,6 @@ Strict directory boundaries:
 
 - **Upstream Interaction (External — `/backend/app/`)**:
   - `/app/wecom_aibot`: WeCom 智能机器人 WS client (Debouncer, WecomAibotClient, WecomAibotOutbound).
-  - `/app/operator/slack`: operator-side adapter for human handoff.
   - `/app/bus`: Redis Streams reactive-inbound bus (strict per-shard serial).
 
 - **Core Logic (`/backend/v/`)**:
@@ -20,10 +19,8 @@ Strict directory boundaries:
     - `session.py`: Postgres-backed session memory (consolidated working memory of completed/expiring sessions).
     - `long_term.py`: Postgres long-term memory split into two tables — see Memory Hierarchy below.
     - `memory_extractor.py`: async coroutine that extracts profile + episodic memories from session memory using DeepSeek v4 flash with structured Pydantic output. Handles **dedup, conflict, and obsolescence** on write to `user_profile` and `memory_episodes`.
-    - `checkpointer.py`: hot/cold migration logic (Redis ⇄ Postgres) on `interrupt()` / `resume`.
   - `/tools`: Built-in tools, all implemented via LangChain `@tool(parse_docstring=True)` so the docstring IS the tool description exposed to the LLM. Each tool's "when to use" lives in its own docstring, not in the system prompt.
     - `calculator` — safe AST eval (no `eval()`, whitelisted ops, exponent ≤ 64).
-    - `transfer_to_human` — invokes LangGraph `interrupt()` primitive.
     - `search` — thin tool wrapper over `rag/retriever.py`; generic semantic recall over `agent.knowledge_chunk` (products / FAQ / policies). Does NOT recency-rank.
     - `recall_memory` — on-demand semantic query against `agent.event_memory` (recency-weighted cosine) for THIS customer's prior conversations.
     - `subagent` — focused single-shot delegate with its own context window. Function intentionally NOT pinned.
@@ -33,8 +30,6 @@ Strict directory boundaries:
   - `/hooks`: Lifecycle interceptors and centralized exception handling. Specific responsibilities:
     - `on_session_start`: inject full `user_profile` row.
     - `on_context_threshold`: trigger `summarizer` async + schedule ARQ delayed `consolidate_session(session_id)` job at `TTL - Δ`.
-    - `on_interrupt`: migrate state Redis → Postgres checkpointer, remove TTL, push alert via `/app/operator/slack/`.
-    - `on_resume`: migrate state Postgres → Redis with fresh TTL.
     - `on_session_end`: final consolidation + extract long-term memory.
   - `/configs`: Pydantic settings models per module. All parameters initialized here.
   - `/cron`: ARQ task definitions. **MVP scenarios**: `logistics_delivery_notification`, `ad_hoc_ad_push`, `repurchase_reminder`. Also hosts `consolidate_session` delayed-job worker.
@@ -56,11 +51,6 @@ Strict directory boundaries:
     - `user_profile`: structured, **one row per `(channel, channel_user_id)`** (preferences, member level, recent-order summary, etc.). Fully injected into system prompt at every `on_session_start`.
     - `event_memory`: vectorized (Qwen `text-embedding-v4`, 1024-dim Matryoshka), pgvector HNSW index. Queried on-demand via the `recall_memory` tool with recency-weighted cosine ranking. Distinct from `agent.knowledge_chunk` (which `search` reads): event_memory is per-customer episodic; knowledge_chunk is the shared corpus.
     - Writes use `memory_extractor` with DeepSeek v4 flash + Pydantic structured output. **Dedup, conflict, and obsolescence are mandatory** — never blindly append.
-- **Checkpointer Hot/Cold Migration**: Working Memory in Redis IS the LangGraph checkpointer on the hot path. On `interrupt()` (transfer_to_human), `on_interrupt` hook migrates the full state to a durable Postgres checkpointer and removes TTL. On `Command(resume=...)`, `on_resume` migrates back with a fresh 30-min TTL. This is the only sanctioned violation of "single store" and is owned by `/memory/checkpointer.py`.
-- **Human Handoff**: implemented via LangGraph `interrupt()`. While suspended:
-  - Customer messages persist as `HumanMessage` but DO NOT re-enter the graph.
-  - Operator messages persist as `AIMessage` with metadata `{author_type: "human_agent", operator_id: ...}`. The system prompt instructs the resumed AI to naturally continue prior responses without disowning them.
-  - Resume is triggered exclusively by the Slack button callback.
 - **Subagent Has No Common Abstraction**: do NOT introduce a `BaseSubAgent`. Background analysts (summarizer, memory_extractor) are async coroutines. The `subagent` tool is a focused single-shot LLM call. They share only the `LLMCaller` utility.
 - **Skill**: install / update / list / pin operations are handled in `/skills`. Trust boundary enforced when loading executable skills.
 - **Cron (ARQ)**: scheduled outreach + delayed memory consolidation. Cron-generated outbound messages MUST be persisted to working memory before being pushed to the channel — they are part of conversation history, not fire-and-forget.
@@ -68,7 +58,6 @@ Strict directory boundaries:
 # Built-in Tools (LangChain `@tool(parse_docstring=True)`)
 All tool descriptions live in their docstrings (single source of truth — the system prompt does NOT re-document them). Adding/changing a tool means editing the docstring; the LLM sees it via `parse_docstring=True`.
 - `calculator` — deterministic arithmetic over a whitelisted AST.
-- `transfer_to_human` — calls LangGraph `interrupt()` with the handoff payload.
 - `search` — semantic recall over `agent.knowledge_chunk` (products / FAQ / policies). Optional `source_type` filter. Returns chunks tagged `[source_type:source_id]`.
 - `recall_memory` — semantic recall over `agent.event_memory` for the current customer (recency-weighted cosine). Customer-scoped; cannot leak across users.
 - `subagent` — single-shot delegate with isolated context. Function intentionally unrestricted: the main agent invokes it whenever an independent reasoning context helps. Subagents may register their own tools (e.g., NL2SQL one would carry `query_metric_meta` + read-only `execute_sql`), but the parent's docstring does NOT pin a fixed use case.

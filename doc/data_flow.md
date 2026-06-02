@@ -48,8 +48,7 @@
                       │  ② is_suspended? → forward to Slack  │
                       │  ③ on_session_start                  │
                       │  ④ graph.ainvoke                     │
-                      │  ⑤ extract_interrupt? → on_interrupt │
-                      │  ⑥ _last_ai_message + send           │
+                                            │  ⑥ _last_ai_message + send           │
                       │  ⑦ _record_last_seen                 │
                       └────────┬─────────────────────────────┘
                                ▼
@@ -109,10 +108,6 @@ handler 内部按顺序：
    - 30 分钟以内：复用现有 session_id
    - 否则：mint 新 uuid（长记忆兜底连续性）
    - minted=True → INSERT agent.session 行（ON CONFLICT DO NOTHING）
-2. **挂起检查**（Phase-2 P0）：
-   if is_suspended(session_id):
-       slack.post_customer_message(thread_ts, msg.text)
-       return  # 不 invoke graph
 3. profile = on_session_start(...) → user_profile 注入到 state
 4. config = {
        "configurable": {
@@ -126,11 +121,6 @@ handler 内部按顺序：
        }
    }
 5. final_state = await graph.ainvoke(input_state, config=config)
-6. **interrupt 检查**（Phase-2 P0）：
-   payload = extract_interrupt(final_state)
-   if payload:
-       on_interrupt(...)  # 迁移 hot→cold + Slack 告警 + 标记 suspended
-       return
 7. reply = _last_ai_message(final_state.messages)
 8. sends[channel](channel_user_id, reply)
 9. _record_last_seen(...)
@@ -141,7 +131,7 @@ handler 内部按顺序：
 CLAUDE.md 明确规定：bus 仅 reactive-inbound。直接走 channel adapter 的好处：
 
 - 入站流不被回执污染。
-- 同一会话回执必然在同一 worker（per-shard 串行），无需额外排队。
+- 同一会话回执必然在同一 worker（per-shard 串行）。
 - 失败语义直接：`send_text` 抛出 → handler 落 DLQ。
 
 ### 2.4 工具调用循环
@@ -156,7 +146,6 @@ CLAUDE.md 明确规定：bus 仅 reactive-inbound。直接走 channel adapter �
 | `search(query, top_k=5, source_type=None)` | 语义召回 `agent.knowledge_chunk` (pgvector cosine)；逻辑在 [rag/retriever.py](../backend/v/rag/retriever.py) | [tools/search.py](../backend/v/tools/search.py) |
 | `recall_memory(query, top_k=5)` | 召回该客户的 `agent.event_memory` (pgvector cosine + 时间衰减重排) | [tools/recall_memory.py](../backend/v/tools/recall_memory.py) |
 | `subagent(task, context_mode=...)` | 单轮 LLM 子任务调用；shared 模式带父 messages 末尾 10 条 | [tools/subagent.py](../backend/v/tools/subagent.py) |
-| `transfer_to_human(reason)` | `langgraph.types.interrupt(...)` — **suspend 整个图** | [tools/transfer_to_human.py](../backend/v/tools/transfer_to_human.py) |
 
 ### 2.5 出站通道
 
@@ -219,55 +208,6 @@ send_repurchase_reminders(ctx, targets):
 
 `profile->>'dw_customer_id'` 是 agent 体系和数仓体系的桥梁（Phase-3 P3 在 `memory_extractor` 中由 LLM 维护）。
 
-## 4. 人工接管（Phase-2 P0）
-
-### 4.1 触发链路
-
-```
-客户复杂问题 → agent_node 决定调 transfer_to_human(reason) →
-  ToolNode 执行 → tool 内部 langgraph.types.interrupt(...) → 整图暂停 →
-    final_state["__interrupt__"] 携带 payload 返回到 worker handler →
-      extract_interrupt(final_state) 不为 None →
-        on_interrupt 接管：
-          1. migrate_hot_to_cold(session_id)：Redis hash → PG checkpointer，删 Redis 键
-          2. UPDATE agent.session SET status='suspended'
-          3. SET session_status:{session_id}=suspended（Redis 缓存，is_suspended() 用）
-          4. slack.post_handoff_alert(...)：Block Kit 卡片 + Resume 按钮 → 拿到 thread_ts
-          5. SET slack_thread:{thread_ts} ↔ session_thread:{session_id}（双向映射）
-```
-
-### 4.2 挂起期间消息走向
-
-```
-客户继续发消息 → debounce → bus consumer → handler.is_suspended() == True →
-  slack.get_thread_for_session(session_id) → thread_ts →
-  slack.post_customer_message(thread_ts, text)
-  ─ LLM 不调 ─
-
-操作员在 Slack thread 里回复 → Slack 推送 message event 到 /operator/slack/events →
-  router 验签 → 查 slack_thread:{thread_ts} 拿到 session_id →
-  on_operator_message callback：
-    1. append_operator_log(session_id, text)（Redis list，7 天 TTL）
-    2. sends[channel](channel_user_id, text)：直接转发给客户
-```
-
-### 4.3 恢复链路
-
-```
-操作员点 "Resume AI" → /operator/slack/interactivity → block_actions →
-  action_id="resume_session", value=session_id →
-  on_resume callback：
-    1. migrate_cold_to_hot(session_id)：PG → Redis
-    2. UPDATE agent.session SET status='active'
-    3. SET session_status:{session_id}=active
-    4. LRANGE operator_log:{session_id} → drained = [...]
-    5. graph.ainvoke(Command(resume={"type":"resume","operator_messages":drained}), config=...)
-       ─ interrupt() 内部返回 decision → tool 返回格式化字符串 → agent 看到 ToolMessage →
-       agent 产出 final AIMessage
-    6. 取 final AIMessage 的 content → sends[channel](user_id, text)
-    7. 删 operator_log key
-```
-
 ## 5. Session 生命周期
 
 ```
@@ -282,8 +222,8 @@ INSERT agent.    GET 命中             session 键自然过期    （+ 长记�
 跨 session 的连续性靠**长期记忆**保证：
 
 - `user_profile` 每次 `on_session_start` 全量注入到 SystemMessage（已实现）。
-- `memory_episodes` 通过 `recall_memory` 工具按需召回（Phase-2 P3 实现）。
-- 抽取链：`consolidate_session` 写 session_memory → `extract_session_memory` 写 user_profile + memory_episodes（Phase-2 P3 实现）。
+- `event_memory` 通过 `recall_memory` 工具按需召回。
+- 抽取链：`consolidate_session` → `extract_session_memory` 写 user_profile + event_memory。
 
 新开 session、靠结构化记忆桥接是有意为之：30 分钟前的对话上下文 ① 大概率与当前问题无关，② 占 token 浪费成本，③ 可能引入误解。
 
@@ -306,9 +246,7 @@ INSERT agent.    GET 命中             session 键自然过期    （+ 长记�
 │ Redis  profile:{ch}:{u}         TTL=1800s                   │  ← user_profile 缓存
 │ Redis  session:{ch}:{u}         TTL=3600s                   │  ← 当前 session_id
 │ Redis  last_seen:{ch}:{u}       TTL=3600s                   │  ← 静默判断
-│ Redis  session_status:{s_id}                                │  ← active / suspended
 │ Redis  proactive_log:{ch}:{u}   TTL=30d                     │  ← 主动消息历史
-│ Redis  operator_log:{s_id}      TTL=7d                      │  ← 人工回复缓存
 └──────────────────────────────────────────────────────────────┘
        ▼ on_interrupt: 整 thread 迁移 (transfer_to_human 触发)
 ┌──────────── Cold Checkpointer (挂起期间) ───────��────┐

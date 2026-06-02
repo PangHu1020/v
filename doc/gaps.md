@@ -24,14 +24,12 @@
 
 LangGraph checkpoint id 是 ULID 风格、单调递增字符串，所以字典序通常等同时间序。但**不保证**——某些 LangGraph 版本可能换 ID 算法。
 
-**Phase-2 P0 部分缓解**：冷路径已经走 langgraph 官方 `AsyncPostgresSaver`，PG 端排序权威。热路径仍是字典序。
-
 **建议**：给 RedisCheckpointer 写入一份 `created_at` 索引（ZSET），`alist` 用 ZSET 分页代替 hash 全扫描。
 
 ### 1.3 出站没有重试 + 失败可能丢消息
 
 [backend/app/wecom_aibot/outbound.py:send_text](../backend/app/wecom_aibot/outbound.py)
-[backend/app/operator/slack/outbound.py:post_handoff_alert](../backend/app/operator/slack/outbound.py)
+~~`SlackOutbound.post_handoff_alert`~~ (已删除)
 
 抛出后由 worker 的 try/except 捕获 → 推 DLQ。但**回执已经丢失**——客户没收到 AI 回复，且 ack 已经发出去。
 
@@ -84,8 +82,7 @@ PG 池或 Redis 创建失败时，FastAPI 会启动失败但错误日志可能�
 - Bus 队列深度
 - 出站失败率
 - 会话时长分布
-- 接管次数 / 平均接管时长
-- recall_memory / MCP 调用频率 + 命中率
+- recall_memory 调用频率 + 命中率
 
 **建议**：Phase-3 加 `prometheus-client`，暴露 `/metrics`。
 
@@ -125,15 +122,7 @@ PG 池或 Redis 创建失败时，FastAPI 会启动失败但错误日志可能�
 - per-tenant shard prefix（避免跨租户消息撞 key）。
 - `agent.session.tenant_id` 进 PK 索引。
 
-### 1.13 LangGraph 1.x ToolNode 在 Command(resume) + 完整生产图组合下的边界 bug
-
-[backend/test/e2e/test_slack_handoff.py](../backend/test/e2e/test_slack_handoff.py) 注释里记录：用真实生产图（enter → agent → tools → ...）走完整 transfer_to_human → on_resume 流程时，ToolNode 在 resume 后会抛 `No message found in input`。
-
-简化图（只 agent → tools → END）的 resume 在单测 [test_handoff.py:TestOnResume](../backend/test/unit/hooks/test_handoff.py) 和 [test_transfer_to_human.py](../backend/test/unit/tools/test_transfer_to_human.py) 里通过。
-
-**当前规避**：e2e 验收测试只断言"挂起 + 迁移 + 转发"部分；resume 后 AI 回复在单测覆盖。
-
-**建议**：在更新 langgraph 版本时复跑完整 e2e；如果上游修复了，把 e2e 的 resume 断言加回来。
+### ~~1.13 LangGraph ToolNode Command(resume) 边界 bug~~（已不适用，handoff 层已删除）
 
 ### 1.14 Proactive 消息 → 父会话注入还没有 drainer
 
@@ -208,8 +197,6 @@ Phase-3 进度：Group A（启动健康自检）/ B（token 计数器）/ C（�
 - 长时稳定性（连续 1 小时 1 RPS，看内存 / 文件描述符 / token 池）
 - pgvector HNSW 调参（ef_construction / M / ef_search）
 - 1.1（bus 重试退避）+ 1.3（outbound 重试 + DLQ 表）一起做
-- 1.13 跟踪 langgraph 上游修复
-- 1.14 接 proactive drainer
 
 ### P2：多租户
 
@@ -240,11 +227,10 @@ Phase-3 进度：Group A（启动健康自检）/ B（token 计数器）/ C（�
 
 | 决策 | 位置 | 原因 |
 | --- | --- | --- |
-| 出站不走 bus | [backend/app/CLAUDE.md](../backend/app/CLAUDE.md) | 入站流不被回执污染；出站语义本来就是直连 |
-| RedisCheckpointer 归在 `backend/v/agents/` 而非 `memory/` | [backend/v/agents/checkpointer.py](../backend/v/agents/checkpointer.py) | checkpointer 是 agent 运行时（state 存档）的一部分，不是用户级记忆 |
+| 出站不走 bus | 架构规则 | 入站流不被回执污染；出站语义本来就是直连 |
+| RedisCheckpointer 归在 `backend/v/agents/` 而非 `memory/` | [backend/v/agents/checkpoints/redis.py](../backend/v/agents/checkpoints/redis.py) | checkpointer 是 agent 运行时（state 存档）的一部分，不是用户级记忆 |
 | 30min 静默后开新 session_id | [doc/data_flow.md §5](data_flow.md) | 旧上下文大概率无关 + 浪费 token；连续性靠长记忆兜底 |
-| Slack 接管期间客户消息直接转发，不入 graph | [backend/app/bus/worker.py](../backend/app/bus/worker.py) | 操作员在 Slack 已经看到，graph suspended 状态下也无法处理 |
-| Channel 层做 debounce 而非 bus 层 | [backend/app/CLAUDE.md](../backend/app/CLAUDE.md) | bus 是路由 + 并发控制层；语义合并属于平台适配 |
+| Debounce 归在 wecom_aibot 适配层而非 bus 层 | 架构规则 | bus 是路由 + 并发控制层；语义合并属于平台适配 |
 | 单 LLM provider（DeepSeek）+ 同家族降级 | [backend/v/CLAUDE.md](../backend/v/CLAUDE.md) | 跨家族降级会引入风格 / 协议差异 |
 | Subagent 是单轮、无嵌套工具调用 | [backend/v/tools/subagent.py](../backend/v/tools/subagent.py) | 真有多步需求让父 agent 自己调，避免无界嵌套 |
 | Skill 匹配是关键词子串而不是向量 | [backend/v/skills/registry.py](../backend/v/skills/registry.py) | MVP 简单可解释；语义召回作为 P3 升级 |

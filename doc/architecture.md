@@ -5,7 +5,6 @@
 外部客户服务 Agent 平台，通过 WeCom 智能机器人 WebSocket 接入 C 端客户。**已实现的能力**：
 
 - 被动答疑主链路（客户消息 → AI 回复，含工具调用循环）
-- Slack 人工接管（`transfer_to_human` 工具 + LangGraph `interrupt()` + 热冷 checkpointer 迁移）
 - ARQ 主动触达（物流送达通知 / 广告推送 / 复购提醒 / 会话总结延迟任务）
 - 长期记忆（session 总结 → user_profile + event_memory，向量召回 + 时间衰减）
 - RAG 检索层（`v/rag/retriever.py` → `agent.knowledge_chunk`，pgvector cosine）
@@ -25,7 +24,6 @@
 ┌──────────────────────────────────────────────────────────────┐
 │  /backend/app/  ── 外壳层（Shell & Gateway）                  │
 │  纯 I/O：WS 帧归一化、签名校验、入站排队、出站投递、           │
-│           Slack operator adapter、ARQ worker 入口             │
 │  ─────────────────────────────────────────────────────────   │
 │  /backend/v/   ── 智能层（Agent Engine）                      │
 │  纯逻辑：LangGraph 编排、LLM 推理、RAG 检索、记忆管理、        │
@@ -55,16 +53,11 @@ backend/
 │   │   ├── messages.py                     SystemMessage（frozen）
 │   │   ├── shard.py                        RedisStreamShard：mmh3 路由
 │   │   ├── producer.py / consumer.py       sharded enqueue / 严格串行消费
-│   │   └── worker.py                       make_bus_handler：粘合 graph + outbound + handoff
+│   │   └── worker.py                       make_bus_handler：粘合 graph + outbound
 │   ├── wecom_aibot/                        WeCom 智能机器人 WS 适配器（Phase-3 G）
 │   │   ├── debounce.py                     500ms 合并窗口
 │   │   ├── client.py                       WecomAibotClient（持久 WS + 指数退避重连）
 │   │   └── outbound.py                     WecomAibotOutbound（Redis pub/sub 跨进程出站）
-│   └── operator/                           Phase-2 P0：人工接管
-│       └── slack/
-│           ├── signature.py                Slack v0 HMAC-SHA256
-│           ├── outbound.py                 SlackOutbound：告警 + 转发
-│           └── router.py                   /events + /interactivity 两个路由
 └── v/                                      Agent Engine
     ├── configs/base.py                     10 个 BaseSettings + get_settings()
     ├── utils/logging.py                    structlog + bind_request
@@ -87,10 +80,8 @@ backend/
     │   └── llm_caller.py                   LLMCaller（30s 超时 + 同家族降级）
     ├── hooks/
     │   ├── session.py                      on_session_start：profile 注入
-    │   └── handoff.py                      extract_interrupt / on_interrupt / on_resume / is_suspended
     ├── tools/
     │   ├── calculator.py                   安全 AST 求值（白名单算子）
-    │   ├── transfer_to_human.py            LangGraph interrupt 触发
     │   ├── recall_memory.py                pgvector cosine + 时间衰减（per-customer）
     │   ├── search.py                       薄包装层 → rag/retriever.py
     │   └── subagent.py                     通用子 agent，shared / independent 上下文
@@ -163,7 +154,6 @@ backend/
 | `BusSettings` | `BUS_` |
 | `WecomSettings` | `WECOM_` |
 | `WecomAibotSettings` | `WECOM_AIBOT_` |
-| `SlackSettings` | `SLACK_` |
 | `ARQSettings` | `ARQ_` |
 | `SkillSettings` | `SKILL_` |
 | `LangSmithSettings` | `LANGSMITH_` |
@@ -194,7 +184,7 @@ backend/
 
 ## 6. 工具体系
 
-`AGENT_TOOLS = [calculator, search, recall_memory, subagent, transfer_to_human]`
+`AGENT_TOOLS = [calculator, search, recall_memory, subagent]`
 
 所有工具使用 `@tool(parse_docstring=True)` — docstring 是 LLM 可见的工具描述（唯一真相源）。
 
@@ -204,7 +194,6 @@ backend/
 | `search` | [tools/search.py](../backend/v/tools/search.py) → [rag/retriever.py](../backend/v/rag/retriever.py) | 共享知识库语义召回 |
 | `recall_memory` | [tools/recall_memory.py](../backend/v/tools/recall_memory.py) | per-customer 事件记忆 + 时间衰减 |
 | `subagent` | [tools/subagent.py](../backend/v/tools/subagent.py) | 单轮 LLM 子任务调用 |
-| `transfer_to_human` | [tools/transfer_to_human.py](../backend/v/tools/transfer_to_human.py) | LangGraph interrupt()，suspend 当前会话 |
 
 ## 7. 部署形态
 
@@ -213,7 +202,6 @@ backend/
 ```
 1. FastAPI 主进程            uv run fastapi dev backend/app/main.py
    ├── Bus consumer task（背景 asyncio）
-   └── Slack 路由
 
 2. ARQ Worker                uv run arq backend.app.cron_worker.WorkerSettings
    ├── 物流 / 广告 / 复购定时任务
@@ -243,7 +231,6 @@ backend/
 ┌──────────────────────────────────────────────────────────────┐
 │  /backend/app/  ── 外壳层（Shell & Gateway）                  │
 │  纯 I/O：WS 帧归一化、签名校验、入站排队、出站投递、           │
-│           Slack operator adapter、ARQ worker 入口             │
 │  ─────────────────────────────────────────────────────────   │
 │  /backend/v/   ── 智能层（Agent Engine）                      │
 │  纯逻辑：LangGraph 编排、LLM 推理、RAG 检索、记忆管理、        │
@@ -273,18 +260,13 @@ backend/
 │   │   ├── messages.py                     SystemMessage（frozen）
 │   │   ├── shard.py                        RedisStreamShard：mmh3 路由
 │   │   ├── producer.py / consumer.py       sharded enqueue / 严格串行消费
-│   │   └── worker.py                       make_bus_handler：粘合 graph + outbound + handoff
+│   │   └── worker.py                       make_bus_handler：粘合 graph + outbound
 │   ├── channels/                           客户侧适配器
 │   │   ├── base.py                         ChannelAdapter ABC
 │   │   ├── debounce.py                     500ms 合并窗口
 │   │   ├── wecom/                          WeCom：signature/crypto/router/outbound（HTTP webhook）
 │   │   ├── wecom_aibot/                    WeCom 智能机器人：WS client + Redis pub/sub outbound（Phase-3 G）
 │   │   └── feishu/                         Feishu：HTTP webhook
-│   └── operator/                           Phase-2 P0：人工接管
-│       └── slack/
-│           ├── signature.py                Slack v0 HMAC-SHA256
-│           ├── outbound.py                 SlackOutbound：告警 + 转发
-│           └── router.py                   /events + /interactivity 两个路由
 └── v/                                      Agent Engine
     ├── configs/base.py                     12 个 BaseSettings + get_settings()
     ├── utils/logging.py                    structlog + bind_request
@@ -305,9 +287,7 @@ backend/
     │   └── llm_caller.py                   LLMCaller（30s 超时 + 同家族降级）
     ├── hooks/
     │   ├── session.py                      on_session_start：profile 注入
-    │   └── handoff.py                      extract_interrupt / on_interrupt / on_resume / append_operator_log / is_suspended
     ├── tools/
-    │   ├── transfer_to_human.py            LangGraph interrupt 触发
     │   ├── recall_memory.py                pgvector cosine + 时间衰减
     │   └── subagent.py                     通用子 agent，shared / independent 上下文
     ├── mcp/                                Phase-2 P1
@@ -357,11 +337,7 @@ backend/
 
 冷路径，基于 langgraph 官方 `AsyncPostgresSaver`。在 DSN 上注入 `search_path=agent,public`，让 LangGraph 的 checkpoints/checkpoint_blobs/checkpoint_writes/checkpoint_migrations 表落到 `agent` schema 而非 `public`。
 
-### 4.6 `migrate_hot_to_cold` / `migrate_cold_to_hot` ([backend/v/agents/checkpointer_migration.py](../backend/v/agents/checkpointer_migration.py))
-
-`transfer_to_human` 触发 `on_interrupt` → 把整个 thread 的 checkpoint 链从 Redis 拷贝到 PG（按父引用顺序重放）→ 删源端。`on_resume` 反向。幂等。
-
-### 4.7 `MCPRegistry` ([backend/v/mcp/registry.py](../backend/v/mcp/registry.py))
+### 4.6 `MCPRegistry` ([backend/v/mcp/registry.py](../backend/v/mcp/registry.py))
 
 启动时连接所有配置的 MCP server，调 `list_tools` 自动把每个工具转成 `langchain_core.tools.StructuredTool`，工具名前缀 `{server_id}__{tool_name}`。读类工具结果走 `MCPToolCache`（L1 内存 5min + L2 Redis 24h），写类按 `write_tools` 列表 opt-out。
 
@@ -393,7 +369,6 @@ L1 进程内 dict + L2 Redis。键 = `mcp:cache:{server_id}:{tool_name}:{sha256(
 | `WecomSettings` | `WECOM_` | P1 |
 | `WecomAibotSettings` | `WECOM_AIBOT_` | P3 G |
 | `FeishuSettings` | `FEISHU_` | P1 |
-| `SlackSettings` | `SLACK_` | P2 P0 |
 | `MCPSettings` | `MCP_` | P2 P1 |
 | `ARQSettings` | `ARQ_` | P2 P2 |
 | `SkillSettings` | `SKILL_` | P2 P4 |
@@ -411,7 +386,7 @@ L1 进程内 dict + L2 Redis。键 = `mcp:cache:{server_id}:{tool_name}:{sha256(
 与 WeCom HTTP webhook 不同，智能机器人协议要求客户端持有一条长连 WS。所以本渠道由独立 worker 进程承载：
 
 - `WecomAibotClient`：持久 WS（指数退避重连 1s→60s + 30s 心跳）。入站 frame 归一化为 `SystemMessage(channel="wecom_aibot")` 后送 `Debouncer`，与 HTTP 渠道共用同一条 bus。
-- `WecomAibotOutbound`：实现与其他渠道 outbound 相同的 `send_text(channel_user_id, text)` 接口，但底层是把 JSON 发布到 Redis pub/sub channel（默认 `wecom_aibot:outbound`）；FastAPI 主进程 / ARQ worker / Slack handoff 任何一处都能往这里发，由 worker 进程统一通过 WS 转发。
+- `WecomAibotOutbound`：实现与其他渠道 outbound 相同的 `send_text(channel_user_id, text)` 接口，但底层是把 JSON 发布到 Redis pub/sub channel（默认 `wecom_aibot:outbound`）；FastAPI 主进程 / ARQ worker 任何一处都能往这里发，由 worker 进程统一通过 WS 转发。
 - `wecom_aibot_worker.py`：进程入口。同时跑 `WecomAibotClient.run()` 和一个 pub/sub 订阅 task，用 SIGINT/SIGTERM 优雅关停。
 
 配置（`WECOM_AIBOT_*`）：`WS_URL` / `TOKEN` / `HEARTBEAT_SECONDS=30` / `OUTBOUND_PUBSUB_CHANNEL=wecom_aibot:outbound`。`WS_URL` 为空时 worker 启动后立即退出，便于在不启用该渠道的部署里直接跳过。
@@ -443,11 +418,9 @@ LangGraph 的 PG checkpointer 表由 `AsyncPostgresSaver.setup()` 在首次连�
 
 | 工具 | 文件 | 作用 |
 | --- | --- | --- |
-| `transfer_to_human` | [tools/transfer_to_human.py](../backend/v/tools/transfer_to_human.py) | 触发 LangGraph `interrupt()`，suspend 当前会话，等人工 |
 | `recall_memory` | [tools/recall_memory.py](../backend/v/tools/recall_memory.py) | pgvector cosine + 时间衰减召回 episodes |
 | `subagent` | [tools/subagent.py](../backend/v/tools/subagent.py) | 单轮 LLM 子任务调用，`context_mode` 控制是否带父消息 |
 
-外加 MCP 注册中心动态发现的工具（命名为 `{server_id}__{tool_name}`），编译 graph 时通过 `extra_tools=` 拼接。LLM 看到的工具列表 = `[transfer_to_human, recall_memory, subagent, *mcp_tools]`，`ToolNode` 用同一个列表分发。
 
 ## 7. 部署形态
 
@@ -457,7 +430,6 @@ LangGraph 的 PG checkpointer 表由 `AsyncPostgresSaver.setup()` 在首次连�
 1. FastAPI 主进程            uv run fastapi dev backend/app/main.py
    ├── 入站 webhook 处理（WeCom HTTP / Feishu HTTP）
    ├── Bus consumer task（背景 asyncio）
-   └── Slack 路由 + 客户路由
 
 2. ARQ Worker                uv run arq backend.app.cron_worker.WorkerSettings
    ├── 物流 / 广告 / 复购定时任务
@@ -500,9 +472,8 @@ LangGraph 的 PG checkpointer 表由 `AsyncPostgresSaver.setup()` 在首次连�
 - 总线 / 网关 / 路由：~25
 - 智能层（state / nodes / graph / hooks）：~35
 - 记忆（checkpointer / migration / extractor / working / long_term）：~30
-- 工具（transfer_to_human / recall_memory / subagent）：~30
+- 工具（recall_memory / subagent / calculator / search）：~50
 - MCP：~37
 - Cron：~22
-- Slack 接管：~28
 - Skill：~39
-- e2e（迁移 / 入站到回复 / pg checkpointer / handoff）：~12
+- e2e（入站到回复 / pg checkpointer）：~0（e2e suite currently minimal）
