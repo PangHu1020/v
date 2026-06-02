@@ -16,7 +16,8 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 
-from backend.v.tools.search import MAX_TOP_K, search
+from backend.v.rag.retriever import MAX_TOP_K
+from backend.v.tools.search import search
 
 
 def _fake_pool(rows: list[dict]) -> MagicMock:
