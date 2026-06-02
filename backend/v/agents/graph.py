@@ -63,7 +63,6 @@ def _make_guarded_tools_node(bound_tools: list[Any]):
             return {
                 "messages": error_msgs,
                 "tool_fingerprints": fingerprints + new_fps,
-                "force_handoff": True,
             }
 
         result = await _tool_node.ainvoke(state, config)

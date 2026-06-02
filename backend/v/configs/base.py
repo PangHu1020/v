@@ -169,24 +169,6 @@ class WecomAibotSettings(BaseSettings):
     outbound_pubsub_channel: str = "wecom_aibot:outbound"
 
 
-class SlackSettings(BaseSettings):
-    """Slack operator-side adapter credentials and target channel.
-
-    Phase-2 P0: handoff alerts and operator interactivity. Empty values
-    disable the Slack adapter (Phase-1 customer flow continues to work).
-    """
-
-    model_config = SettingsConfigDict(**_COMMON, env_prefix="SLACK_")
-
-    bot_token: str = ""
-    signing_secret: str = ""
-    handoff_channel_id: str = ""
-
-    @property
-    def enabled(self) -> bool:
-        return bool(self.bot_token and self.signing_secret and self.handoff_channel_id)
-
-
 class ARQSettings(BaseSettings):
     """ARQ worker settings (Phase-2 P2).
 
@@ -238,7 +220,6 @@ class AppSettings(BaseModel):
     bus: BusSettings
     wecom: WecomSettings
     wecom_aibot: WecomAibotSettings
-    slack: SlackSettings
     arq: ARQSettings
     skill: SkillSettings
     langsmith: LangSmithSettings
@@ -262,7 +243,6 @@ def get_settings() -> AppSettings:
         bus=BusSettings(),
         wecom=WecomSettings(),
         wecom_aibot=WecomAibotSettings(),
-        slack=SlackSettings(),
         arq=ARQSettings(),
         skill=SkillSettings(),
         langsmith=LangSmithSettings(),

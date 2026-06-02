@@ -20,7 +20,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 from backend.v.agents.prompts import build_main_system_prompt
@@ -32,12 +32,12 @@ from backend.v.memory.prompts import (
 from backend.v.memory.types import MemoryEntry, UserProfile
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.skills import SkillRegistry
-from backend.v.tools import calculator, recall_memory, search, subagent, transfer_to_human
+from backend.v.tools import calculator, recall_memory, search, subagent
 from backend.v.utils.logging import get_logger
 
 _log = get_logger("agents.nodes")
 
-AGENT_TOOLS: list = [calculator, search, recall_memory, subagent, transfer_to_human]
+AGENT_TOOLS: list = [calculator, search, recall_memory, subagent]
 """Tools bound to the main agent."""
 
 
@@ -175,35 +175,13 @@ async def agent_node(
     *,
     tools: list[Any] | None = None,
 ) -> dict[str, Any]:
-    """Invoke the main-tier LLM and append its reply to ``messages``.
-
-    Phase-3 Group D: when ``state["force_handoff"]`` is set by the tool
-    guard, skip the LLM and inject a ``transfer_to_human`` tool call
-    directly so the interrupt fires on the next ToolNode pass.
-    """
+    """Invoke the main-tier LLM and append its reply to ``messages``."""
     cfg = config.get("configurable", {}) if config else {}
     caller: LLMCaller | None = cfg.get("llm_caller")
     if caller is None:
         raise RuntimeError("agent_node requires config['configurable']['llm_caller']")
 
     started = time.perf_counter()
-    if state.get("force_handoff"):
-        _log.warning("agents.agent_node.force_handoff")
-        return {
-            "messages": [
-                AIMessage(
-                    content="",
-                    tool_calls=[
-                        {
-                            "id": "force-handoff-0",
-                            "name": "transfer_to_human",
-                            "args": {"reason": "工具安全机制触发强制转人工"},
-                        }
-                    ],
-                )
-            ]
-        }
-
     bound_tools = tools if tools is not None else AGENT_TOOLS
     result = await caller.chat(
         "main_primary",
