@@ -111,8 +111,6 @@ def make_bus_handler(
     compression_threshold_tokens: int = 0,
     compression_keep_recent_messages: int = 4,
     token_model: str | None = None,
-    consolidate_callable: Any | None = None,
-    consolidate_ctx: dict[str, Any] | None = None,
 ) -> Callable[[SystemMessage], Awaitable[None]]:
     """Build a bus consumer handler bound to the runtime dependencies."""
 
@@ -168,8 +166,6 @@ def make_bus_handler(
                         "compression_threshold_tokens": compression_threshold_tokens,
                         "compression_keep_recent_messages": compression_keep_recent_messages,
                         "token_model": token_model,
-                        "consolidate_callable": consolidate_callable,
-                        "consolidate_ctx": consolidate_ctx,
                     },
                     "run_name": f"turn:{msg.channel}:{msg.channel_user_id}",
                     "tags": [f"channel:{msg.channel}", f"session:{session_id}"],

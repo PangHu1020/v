@@ -25,7 +25,6 @@ from backend.v.memory.event_memory import (
 )
 from backend.v.memory.long_term import read_user_profile
 from backend.v.memory.memory_extractor import (
-    extract_session_memory,
     promote_to_long_term,
 )
 from backend.v.memory.prompts import (
@@ -53,7 +52,6 @@ __all__ = [
     "append_working_memory",
     "cache_user_profile",
     "delete_working_memory",
-    "extract_session_memory",
     "get_cached_user_profile",
     "insert_event_memories",
     "promote_to_long_term",

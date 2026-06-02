@@ -169,27 +169,6 @@ class WecomAibotSettings(BaseSettings):
     outbound_pubsub_channel: str = "wecom_aibot:outbound"
 
 
-class ARQSettings(BaseSettings):
-    """ARQ worker settings (Phase-2 P2).
-
-    The ARQ worker is a separate process from the FastAPI app. It runs
-    cron tasks (logistics notification, ad-hoc ad push, repurchase
-    reminder) and delayed jobs (session memory consolidation). Defaults
-    to the same Redis instance as bus / working memory; ``ARQ_REDIS_URL``
-    can split queue traffic onto its own database.
-    """
-
-    model_config = SettingsConfigDict(**_COMMON, env_prefix="ARQ_")
-
-    redis_url: str = ""
-    queue_name: str = "arq:queue"
-    max_jobs: int = Field(default=10, ge=1)
-    job_timeout_seconds: int = Field(default=120, ge=1)
-
-    def effective_redis_url(self, fallback: str) -> str:
-        return self.redis_url or fallback
-
-
 class SkillSettings(BaseSettings):
     """Skill loader settings (Phase-2 P4).
 
@@ -220,7 +199,6 @@ class AppSettings(BaseModel):
     bus: BusSettings
     wecom: WecomSettings
     wecom_aibot: WecomAibotSettings
-    arq: ARQSettings
     skill: SkillSettings
     langsmith: LangSmithSettings
 
@@ -243,7 +221,6 @@ def get_settings() -> AppSettings:
         bus=BusSettings(),
         wecom=WecomSettings(),
         wecom_aibot=WecomAibotSettings(),
-        arq=ARQSettings(),
         skill=SkillSettings(),
         langsmith=LangSmithSettings(),
     )

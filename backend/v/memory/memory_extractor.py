@@ -237,9 +237,3 @@ async def promote_to_long_term(
             events_inserted=events_inserted,
         )
         return {"profile_updated": profile_updated, "events_inserted": events_inserted}
-
-
-# Public alias kept for ARQ workers / other callers that import the
-# Phase-2 name. The function shape is unchanged but the body is the
-# Phase-3 promotion above.
-extract_session_memory = promote_to_long_term

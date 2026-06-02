@@ -20,7 +20,6 @@ from backend.app.store import close_client, close_pool, create_client, create_po
 from backend.v.agents.checkpoints.redis import RedisCheckpointer
 from backend.v.agents.graph import build_graph
 from backend.v.configs import get_settings
-from backend.v.cron.tasks.consolidate_session import consolidate_session
 from backend.v.models.factory import get_embedding
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.skills import SkillRegistry, load_skills
@@ -70,14 +69,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     sends: dict[str, Any] = {"wecom_aibot": wecom_aibot_outbound.send_text}
 
-    consolidate_ctx = {
-        "pool": pg_pool,
-        "redis": redis,
-        "llm_caller": llm_caller,
-        "ttl_seconds": settings.memory.working_ttl_seconds,
-        "event_ttl_days": settings.memory.event_ttl_days,
-    }
-
     handler = make_bus_handler(
         graph=graph,
         pool=pg_pool,
@@ -93,8 +84,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         compression_threshold_tokens=settings.memory.compression_threshold_tokens,
         compression_keep_recent_messages=settings.memory.compression_keep_recent_messages,
         token_model=settings.llm.main_primary,
-        consolidate_callable=consolidate_session,
-        consolidate_ctx=consolidate_ctx,
     )
 
     consumer = BusConsumer(
