@@ -1,5 +1,5 @@
 # Project Description and Function Overview
-A state-driven AI agent platform for **external customer service over enterprise IM** (WeCom + Feishu), built on LangGraph, FastAPI, Redis Streams, ARQ, and PostgreSQL (with pgvector).
+A state-driven AI agent platform for **external customer service over enterprise IM** (WeCom 智能机器人 WebSocket), built on LangGraph, FastAPI, Redis Streams, ARQ, and PostgreSQL (with pgvector).
 
 - **Primary mode**: reactive customer-service inquiries (被动答疑).
 - **Secondary mode**: proactive scheduled outreach (logistics notifications, ad pushes, repurchase reminders).
@@ -25,7 +25,7 @@ You MUST strictly follow this execution sequence. Do NOT skip steps:
 NEVER bypass layers to create shortcuts.
 
 **1. Reactive Workflow (Customer Initiates Inquiry)**
-`Customer` → `[WeCom | Feishu]` → `/app/channels/{platform}` (signature verify, decrypt, **500ms debounce + normalize** to `SystemMessage`) → `/app/bus` (Redis Streams, sharded by `(channel, channel_user_id)`, **strict per-shard serial**) → `Worker` consumes → calls `/v/agents` (LangGraph) → Agent uses `/v/tools` → reply written through `/v/memory` → reply pushed back via `/app/bus` → `Channel` → `Customer`.
+`Customer` → `WeCom 智能机器人 WS` → `wecom_aibot_worker` (**500ms debounce + normalize** to `SystemMessage`) → `/app/bus` (Redis Streams, sharded by `(channel, channel_user_id)`, **strict per-shard serial**) → `Worker` consumes → calls `/v/agents` (LangGraph) → Agent uses `/v/tools` → reply pushed back via Redis pub/sub → `WecomAibotClient` → `Customer`.
 
 **2. Proactive Workflow (System Initiates Outreach)**
 `/v/cron` (ARQ scheduled task) → calls `/v/agents` to generate context-aware message → writes to `/v/memory` (CRITICAL — proactive output is part of conversation history) → pushes to `/app/bus` → `Channel` → `Customer`.

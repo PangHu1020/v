@@ -30,8 +30,7 @@ LangGraph checkpoint id 是 ULID 风格、单调递增字符串，所以字典�
 
 ### 1.3 出站没有重试 + 失败可能丢消息
 
-[backend/app/channels/wecom/outbound.py:send_text](../backend/app/channels/wecom/outbound.py)
-[backend/app/channels/feishu/outbound.py:send_text](../backend/app/channels/feishu/outbound.py)
+[backend/app/wecom_aibot/outbound.py:send_text](../backend/app/wecom_aibot/outbound.py)
 [backend/app/operator/slack/outbound.py:post_handoff_alert](../backend/app/operator/slack/outbound.py)
 
 抛出后由 worker 的 try/except 捕获 → 推 DLQ。但**回执已经丢失**——客户没收到 AI 回复，且 ack 已经发出去。
@@ -42,18 +41,13 @@ LangGraph checkpoint id 是 ULID 风格、单调递增字符串，所以字典�
 - 仍失败后写入 `agent.outbound_dlq` 表（新建），由人工或定时任务复投。
 - 客户长时间无回复时主动发"系统繁忙"占位（避免静默失败）。
 
-### 1.4 Token cache 仅进程内
+### 1.4 ~~Token cache 仅进程内~~（已不适用）
 
-[backend/app/channels/wecom/outbound.py:_access_token](../backend/app/channels/wecom/outbound.py)
-[backend/app/channels/feishu/outbound.py:_tenant_access_token](../backend/app/channels/feishu/outbound.py)
-
-多 worker / 多 pod 时每个进程独立刷新 token，存在重复请求和潜在竞态。FastAPI 主进程和 ARQ worker 进程会**双倍**刷新 token（同一份 corp 配置下）。
-
-**建议**：多实例部署时把 token 缓存搬到 Redis（带分布式锁），让所有 worker 共享。
+WeCom HTTP webhook 和 Feishu 已移除；WeCom 智能机器人 WS 不需要 access_token 刷新。此条目已过时，无需处理。
 
 ### 1.5 Debouncer 状态在重启后会丢
 
-[backend/app/channels/debounce.py:Debouncer](../backend/app/channels/debounce.py) 用 Redis hash 存累积消息，但**定时器是 asyncio task 在内存里**。进程重启后：
+[backend/app/wecom_aibot/debounce.py:Debouncer](../backend/app/wecom_aibot/debounce.py) 用 Redis hash 存累积消息，但**定时器是 asyncio task 在内存里**。进程重启后：
 
 - Redis 里残留 pending 数据（pexpire 设了 4 倍窗口防泄漏）。
 - 没有 task 来 flush，等到 expire 就自然消失。
@@ -156,14 +150,9 @@ if proactive:
     await redis.delete(...)
 ```
 
-### 1.15 MCPServerConfig.api_key 是明文 env 字符串
+### ~~1.15 MCPServerConfig.api_key 是明文 env 字符串~~（已移除）
 
-[backend/v/mcp/config.py](../backend/v/mcp/config.py) 把 api_key 整段以 JSON 形式塞进 `MCP_SERVERS_JSON` env var。生产里这意味着 token 出现在进程环境、容器配置、CI 日志里。
-
-**建议**：
-
-- ① 支持 `${SECRET_NAME}` 占位符，运行时从 vault / Secret Manager 解析。
-- ② 或者改成单独的 `MCP_{ID}_API_KEY` env 一对一映射。
+MCP 层已整体删除。此条目不适用。
 
 ### 1.16 Skill 加载器只支持 markdown，未做 SKILL.md+exec 沙箱
 
@@ -185,9 +174,9 @@ if proactive:
 
 ## 2. Phase-3 待办（按优先级）
 
-Phase-2 已全部落地（P0 Slack handoff / P1 MCP / P2 ARQ Cron / P3 长记忆 / 通用 subagent / P4 Skill 加载器）。
+Phase-2 已落地：P0 Slack handoff / P2 ARQ Cron / P3 长记忆 / 通用 subagent / P4 Skill 加载器。（P1 MCP 已移除。）
 
-Phase-3 进度：Group A（启动健康自检）/ B（token 计数器）/ C（三层记忆 + 中段压缩）/ D（工具死循环 + 熔断）/ E（intent / reflection 节点）/ F（情绪兜底接管）/ G（WeCom 智能机器人 WS 渠道，含独立 worker + Redis 出站通道）已合入 main。剩下的是运维 / 性能 / 多租户三块。
+Phase-3 进度：Group A（启动健康自检）/ B（token 计数器）/ C（三层记忆 + 中段压缩）/ D（工具死循环 + 熔断）/ E（intent / reflection 节点）/ G（WeCom 智能机器人 WS 渠道，含独立 worker + Redis 出站通道）已合入 main。Group F（情绪预判接管）和 MCP 层已移除。剩下的是运维 / 性能 / 多租户三块。
 
 ### P0：可观测性 + 运维
 
@@ -201,7 +190,6 @@ Phase-3 进度：Group A（启动健康自检）/ B（token 计数器）/ C（�
   - `bus_queue_depth{shard}` Gauge
   - `bus_handler_duration_seconds{outcome}` Histogram
   - `outbound_send_total{channel,outcome}` Counter
-  - `mcp_tool_call_total{server,tool,cache}` Counter
   - `handoff_active_sessions` Gauge
 - `/metrics` endpoint
 - `doc/logging_schema.md`：必填字段（request_id / channel / channel_user_id / session_id）+ 推荐字段
@@ -235,12 +223,10 @@ Phase-3 进度：Group A（启动健康自检）/ B（token 计数器）/ C（�
 - `agent.session.tenant_id NOT NULL` 做 PK 一部分
 - per-tenant skill 目录
 
-### P3：MCP 增强
+### P3：Skill 增强
 
-- 1.15 token 占位符 / 二级 env 解析
-- OAuth 2.0 device flow 真实接入
-- `executable Skill`（1.16）
-- skill 语义匹配（1.17）
+- `executable Skill`（1.16）：subprocess + cgroup 沙箱，信任边界
+- skill 语义匹配（1.17）：embedder-based cosine 替换关键词子串
 
 ### P4：Schema 迁移工具化
 
@@ -260,7 +246,6 @@ Phase-3 进度：Group A（启动健康自检）/ B（token 计数器）/ C（�
 | Slack 接管期间客户消息直接转发，不入 graph | [backend/app/bus/worker.py](../backend/app/bus/worker.py) | 操作员在 Slack 已经看到，graph suspended 状态下也无法处理 |
 | Channel 层做 debounce 而非 bus 层 | [backend/app/CLAUDE.md](../backend/app/CLAUDE.md) | bus 是路由 + 并发控制层；语义合并属于平台适配 |
 | 单 LLM provider（DeepSeek）+ 同家族降级 | [backend/v/CLAUDE.md](../backend/v/CLAUDE.md) | 跨家族降级会引入风格 / 协议差异 |
-| MCP 工具命名带 server_id 前缀 | [backend/v/mcp/registry.py](../backend/v/mcp/registry.py) | 不同 server 可能有同名工具（如 search），前缀消除歧义 |
 | Subagent 是单轮、无嵌套工具调用 | [backend/v/tools/subagent.py](../backend/v/tools/subagent.py) | 真有多步需求让父 agent 自己调，避免无界嵌套 |
 | Skill 匹配是关键词子串而不是向量 | [backend/v/skills/registry.py](../backend/v/skills/registry.py) | MVP 简单可解释；语义召回作为 P3 升级 |
 | LangGraph 节点用闭包而非 functools.partial | [backend/v/agents/graph.py](../backend/v/agents/graph.py) | partial 让 LangGraph 签名检测错过 config 参数 |

@@ -1,14 +1,14 @@
 # Project Description and Function Overview
-The agent engine (`/backend/v/`) for a LangGraph-based external customer-service system over WeCom + Feishu.
+The agent engine (`/backend/v/`) for a LangGraph-based external customer-service system over WeCom 智能机器人 WebSocket.
 
-- **What it does**: ONLY core closed-loop agent logic — LangGraph state orchestration, intent reasoning, tool invocation, MCP/Skill integration, hierarchical memory management (Redis hot + Postgres cold + pgvector), and ARQ-driven proactive cron tasks.
+- **What it does**: ONLY core closed-loop agent logic — LangGraph state orchestration, intent reasoning, tool invocation, RAG retrieval, Skill integration, hierarchical memory management (Redis hot + Postgres cold + pgvector), and ARQ-driven proactive cron tasks.
 - **What it does NOT do**: NO API gateway auth, NO web routing, NO webhook signature handling, NO frontend rendering. Those belong to `/backend/app/`.
 
 # Project structure and corresponding functions
 Strict directory boundaries:
 
 - **Upstream Interaction (External — `/backend/app/`)**:
-  - `/app/channels`: customer-side platform adapters (WeCom, Feishu).
+  - `/app/wecom_aibot`: WeCom 智能机器人 WS client (Debouncer, WecomAibotClient, WecomAibotOutbound).
   - `/app/operator/slack`: operator-side adapter for human handoff.
   - `/app/bus`: Redis Streams reactive-inbound bus (strict per-shard serial).
 
@@ -24,15 +24,14 @@ Strict directory boundaries:
   - `/tools`: Built-in tools, all implemented via LangChain `@tool(parse_docstring=True)` so the docstring IS the tool description exposed to the LLM. Each tool's "when to use" lives in its own docstring, not in the system prompt.
     - `calculator` — safe AST eval (no `eval()`, whitelisted ops, exponent ≤ 64).
     - `transfer_to_human` — invokes LangGraph `interrupt()` primitive.
-    - `search` — generic semantic recall over `agent.knowledge_chunk` (products / FAQ / policies). Catch-all RAG: items carry their `(source_type, source_id)` for follow-up. Does NOT recency-rank — knowledge corpora are roughly equally fresh.
-    - `recall_memory` — on-demand semantic query against `agent.event_memory` (recency-weighted cosine) for THIS customer's prior conversations. Distinct from `search`: this is per-customer episodic memory, not the shared knowledge corpus.
-    - `subagent` — focused single-shot delegate with its own context window. Function is intentionally NOT pinned: invoke when a step benefits from independent reasoning (multi-step decomposition, isolated reformatting, NL2SQL, etc.). The LLM decides; do not enumerate a fixed list of "valid" subtasks here.
-  - `/mcp`: Model Context Protocol client. Supports stdio + HTTP/SSE transports, OAuth + API-Key auth. Tool-result cache: `tool_name + args_hash` keyed, 5-min in-memory L1 + 24-h Redis L2; write-class tools opt-out.
+    - `search` — thin tool wrapper over `rag/retriever.py`; generic semantic recall over `agent.knowledge_chunk` (products / FAQ / policies). Does NOT recency-rank.
+    - `recall_memory` — on-demand semantic query against `agent.event_memory` (recency-weighted cosine) for THIS customer's prior conversations.
+    - `subagent` — focused single-shot delegate with its own context window. Function intentionally NOT pinned.
+  - `/rag`: Retrieval layer. `retriever.py` owns the pgvector SQL (filtered + unfiltered branches), top_k clamping, and result formatting. Tools and future endpoints import from here — no logic duplication.
   - `/skills`: Skill management. Two formats supported: pure markdown SOP, and `SKILL.md` + executable scripts. Sources: internal repo + community registry. **Executable scripts run only from internal-repo or whitelisted community sources; un-whitelisted community skills degrade to markdown-only mode.**
   - `/models`: LLM and embedding factory. OpenAI-compatible adapters via `langchain-openai` `ChatOpenAI(base_url=...)`. Per-task routing read from `.env`. Same-family fallback only (e.g., `pro → flash`); cross-family fallback deferred. Trigger conditions: 30-second timeout (one shot), HTTP 5xx, HTTP 429.
   - `/hooks`: Lifecycle interceptors and centralized exception handling. Specific responsibilities:
-    - `on_session_start`: inject full `user_profile` row, register debounce metadata.
-    - `pre_tool` / `post_tool`: MCP cache, tool error reroute back into graph state.
+    - `on_session_start`: inject full `user_profile` row.
     - `on_context_threshold`: trigger `summarizer` async + schedule ARQ delayed `consolidate_session(session_id)` job at `TTL - Δ`.
     - `on_interrupt`: migrate state Redis → Postgres checkpointer, remove TTL, push alert via `/app/operator/slack/`.
     - `on_resume`: migrate state Postgres → Redis with fresh TTL.
@@ -62,8 +61,7 @@ Strict directory boundaries:
   - Customer messages persist as `HumanMessage` but DO NOT re-enter the graph.
   - Operator messages persist as `AIMessage` with metadata `{author_type: "human_agent", operator_id: ...}`. The system prompt instructs the resumed AI to naturally continue prior responses without disowning them.
   - Resume is triggered exclusively by the Slack button callback.
-- **Subagent Has No Common Abstraction**: do NOT introduce a `BaseSubAgent`. Background analysts (summarizer, memory_extractor) are async coroutines. The `subagent` tool is a true LangGraph subgraph. They share only the `LLMCaller` utility (retry + routing + accounting).
-- **MCP**: connection lifecycle, auth (OAuth / API Key), tool-result caching (5-min memory + 24-h Redis), and write-class opt-out are all handled in `/mcp`.
+- **Subagent Has No Common Abstraction**: do NOT introduce a `BaseSubAgent`. Background analysts (summarizer, memory_extractor) are async coroutines. The `subagent` tool is a focused single-shot LLM call. They share only the `LLMCaller` utility.
 - **Skill**: install / update / list / pin operations are handled in `/skills`. Trust boundary enforced when loading executable skills.
 - **Cron (ARQ)**: scheduled outreach + delayed memory consolidation. Cron-generated outbound messages MUST be persisted to working memory before being pushed to the channel — they are part of conversation history, not fire-and-forget.
 

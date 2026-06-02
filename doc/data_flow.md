@@ -16,31 +16,27 @@
    Customer
       │  (消息)
       ▼
-┌─────────────────┐
-│ WeCom / Feishu  │  ← 加密 + 签名（AES-CBC + SHA1/SHA256）
-└────────┬────────┘
-         │ HTTP POST webhook
-         ▼
+┌─────────────────────────────────────┐
+│ WeCom 智能机器人 WS endpoint         │
+└────────────┬────────────────────────┘
+             │ JSON frame (cmd=aibot_msg_callback)
+             ▼
+┌─────────────────────────────────────────────────┐
+│ wecom_aibot_worker 进程                          │
+│  WecomAibotClient:                              │
+│   1. 解析帧 → 提取 text / chatid / msgid         │
+│   2. 构造 SystemMessage                          │
+└────────────┬────────────────────────────────────┘
+             ▼
 ┌──────────────────────────────────┐
-│ /backend/app/gateway/middleware  │  RequestIdMiddleware
-└────────┬─────────────────────────┘
-         ▼
-┌──────────────────────────────────┐
-│ /backend/app/channels/{platform} │
-│  1. signature.verify_signature   │
-│  2. crypto.{Wecom|Feishu}Crypto  │
-│  3. XML/JSON parse               │
-│  4. 构造 SystemMessage           │
-└────────┬─────────────────────────┘
-         ▼
-┌──────────────────────────────────┐
-│ /backend/app/channels/debounce   │  500ms 静默窗口、合并 burst
-└────────┬─────────────────────────┘
-         ▼ (after 500ms idle)
+│ /backend/app/wecom_aibot/        │
+│ debounce.py  500ms 静默窗口       │
+└────────────┬─────────────────────┘
+             ▼ (after 500ms idle)
 ┌──────────────────────────────────┐
 │ /backend/app/bus/producer        │  XADD bus:{shard}
-└────────┬─────────────────────────┘
-         ▼
+└────────────┬─────────────────────┘
+             ▼
 ┌────────────────┐    ┌─────────────────────────────────────────┐
 │ Redis Streams  │ ◀▶│ /backend/app/bus/consumer               │
 │ (sharded)      │    │   每 shard 一个 asyncio task，严格串行   │
@@ -48,7 +44,6 @@
                                ▼
                       ┌──────────────────────────────────────┐
                       │ /backend/app/bus/worker              │
-                      │   make_bus_handler 闭包              │
                       │  ① _resolve_session_id               │
                       │  ② is_suspended? → forward to Slack  │
                       │  ③ on_session_start                  │
@@ -58,42 +53,39 @@
                       │  ⑦ _record_last_seen                 │
                       └────────┬─────────────────────────────┘
                                ▼
-                      ┌──────────────────────────────────────────┐
-                      │ LangGraph                                │
-                      │ enter → agent → [tools? → agent]* → exit │
-                      └────────┬─────────────────────────────────┘
+                      ┌────────────────────────────────────────────────┐
+                      │ LangGraph                                      │
+                      │ enter → compress → intent → agent → reflect   │
+                      │       → [tools? → agent]*  → exit             │
+                      └────────┬───────────────────────────────────────┘
                                │ AIMessage
                                ▼
                       ┌──────────────────────────────────┐
-                      │ channel-direct outbound          │  （**不**经 bus）
-                      └────────┬─────────────────────────┘
+                      │ WecomAibotOutbound.send_text      │
+                      │ redis.publish → wecom_aibot_worker│
+                      │ → WecomAibotClient WS 写帧        │
+                      └──────────────────────────────────┘
                                ▼
                             Customer
 ```
 
 ### 2.2 关键时序细节
 
-**(1) HTTP → Bus**（要求 < 1 秒响应）
-
-WeCom / Feishu 平台对 webhook 响应有 5 秒超时；超时即重投。
+**(1) WS frame → Bus**
 
 ```
-T0      入站 webhook
-T0+5ms  RequestIdMiddleware 绑定上下文
-T0+10ms verify_signature（HMAC，常量时间比较）
-T0+15ms crypto.decrypt（AES）
-T0+20ms XML / JSON parse + 构造 SystemMessage
-T0+25ms Debouncer.observe（HSET + 取消重排定时器）
-T0+30ms HTTP 200 "success" 返回
+T0      入站 WS frame
+T0+2ms  帧解析 + SystemMessage 构造
+T0+5ms  Debouncer.observe（HSET + 取消重排定时器）
+T0+505ms 定时器到期 → BusProducer.enqueue → XADD
 ```
 
 **(2) Debounce 窗口**
 
 ```
-T0+25ms   observe(msg1)：HSET pending=msg1，启动定时器 500ms 后 flush
-T0+200ms  observe(msg2)：HSET pending=msg1+msg2，cancel 旧定时器，重启 500ms
-T0+450ms  observe(msg3)：HSET pending=msg1+msg2+msg3，再次 cancel + 重启
-T0+950ms  定时器到期：HGETALL pending → BusProducer.enqueue → HDEL
+T0       observe(msg1)：HSET pending=msg1，启动定时器 500ms
+T0+200ms observe(msg2)：HSET pending=msg1+msg2，cancel + 重启
+T0+700ms 定时器到期：HGETALL → BusProducer.enqueue → HDEL
 ```
 
 **(3) Bus 消费 → 回复**
@@ -152,57 +144,32 @@ CLAUDE.md 明确规定：bus 仅 reactive-inbound。直接走 channel adapter �
 - 同一会话回执必然在同一 worker（per-shard 串行），无需额外排队。
 - 失败语义直接：`send_text` 抛出 → handler 落 DLQ。
 
-### 2.4 工具调用循环（Phase-2 P0+P1+P3 + Phase-3 G 后）
+### 2.4 工具调用循环
 
-`agent_node` 给 LLM 绑定的工具列表 = `[calculator, search, recall_memory, subagent, transfer_to_human, *mcp_tools]`，绑定方式见 `LLMCaller.chat(role, msgs, tools=...)`。LLM 输出 `AIMessage(tool_calls=[...])` 时，`route_after_agent` 路由到 `ToolNode`，`ToolNode` 用同一份工具列���分发执行，工具结果作为 `ToolMessage` 写回 state，再回到 `agent`。直到 LLM 不再产出 tool_calls 才退出 → `exit`。
+`AGENT_TOOLS = [calculator, search, recall_memory, subagent, transfer_to_human]`
 
-工具说明（Phase-3 G 完整列表）：
+工具说明：
 
 | 工具 | 行为 | 实现 |
 | --- | --- | --- |
-| `calculator(expr)` | 安全 AST 求值（白名单算子，exponent ≤ 64，结果 ≤ 1e18） | [backend/v/tools/calculator.py](../backend/v/tools/calculator.py) |
-| `search(query, top_k=5, source_type=None)` | 语义召回 `agent.knowledge_chunk` (pgvector cosine)，可选 `source_type` 过滤 | [backend/v/tools/search.py](../backend/v/tools/search.py) |
-| `recall_memory(query, top_k=5)` | 召回该客户的 `agent.event_memory` (pgvector cosine + 时间衰减重排，half_life=30d) | [backend/v/tools/recall_memory.py](../backend/v/tools/recall_memory.py) |
-| `subagent(task, context_mode=...)` | 单轮 LLM 子任务调用；shared 模式带父 messages 末尾 10 条 | [backend/v/tools/subagent.py](../backend/v/tools/subagent.py) |
-| `transfer_to_human(reason)` | 调用 `langgraph.types.interrupt({"type": "transfer_to_human", "reason": ...})`，**suspend 整个图** | [backend/v/tools/transfer_to_human.py](../backend/v/tools/transfer_to_human.py) |
-| `{server_id}__{tool}` | MCP 工具，结果走 L1(5min)+L2(24h) 缓存（写类按配置 opt-out） | [backend/v/mcp/](../backend/v/mcp/) |
+| `calculator(expr)` | 安全 AST 求值（白名单算子，exponent ≤ 64） | [tools/calculator.py](../backend/v/tools/calculator.py) |
+| `search(query, top_k=5, source_type=None)` | 语义召回 `agent.knowledge_chunk` (pgvector cosine)；逻辑在 [rag/retriever.py](../backend/v/rag/retriever.py) | [tools/search.py](../backend/v/tools/search.py) |
+| `recall_memory(query, top_k=5)` | 召回该客户的 `agent.event_memory` (pgvector cosine + 时间衰减重排) | [tools/recall_memory.py](../backend/v/tools/recall_memory.py) |
+| `subagent(task, context_mode=...)` | 单轮 LLM 子任务调用；shared 模式带父 messages 末尾 10 条 | [tools/subagent.py](../backend/v/tools/subagent.py) |
+| `transfer_to_human(reason)` | `langgraph.types.interrupt(...)` — **suspend 整个图** | [tools/transfer_to_human.py](../backend/v/tools/transfer_to_human.py) |
 
-所有工具使用 `@tool(parse_docstring=True)`，docstring 即 LLM 可见的工具描述（单一真相源）。
+### 2.5 出站通道
 
-### 2.5 WeCom 智能机器人 WS 变体（Phase-3 G）
-
-智能机器人不走 HTTP webhook，而是客户端持有一条长连 WS。入站/出站全部由独立 worker 进程（`backend/app/wecom_aibot_worker.py`）承担：
-
-```
-┌──────────────────────────────┐
-│ WeCom 智能机器人 WS endpoint │  ← 持久连接
-└────────────┬─────────────────┘
-             │ frame
-             ▼
-┌─────────────────────────────────────────────────┐
-│ wecom_aibot_worker 进程                          │
-│  WecomAibotClient.run():                        │
-│   1. 指数退避重连 1s→60s + 30s 心跳              │
-│   2. 解析 frame → SystemMessage(channel=         │
-│      "wecom_aibot")                             │
-│   3. Debouncer.observe → BusProducer.enqueue    │  ← 与 HTTP 渠道共用同一条 bus
-└─────────────────────────────────────────────────┘
-             ▼
-        （后续与 §2.1 完全一致：bus → consumer → graph）
-```
-
-出站方向因为 WS 连接只在 worker 进程里，FastAPI 主进程 / ARQ worker / Slack handoff 都不能直接发送。所以出站走 Redis pub/sub：
+WS 连接只在 `wecom_aibot_worker` 进程里，FastAPI 主进程 / ARQ worker / Slack handoff 通过 Redis pub/sub 发布，worker 统一写 WS：
 
 ```
 sends["wecom_aibot"](user_id, text)
   → WecomAibotOutbound.send_text()
   → redis.publish("wecom_aibot:outbound", {channel_user_id, text})
-  ─────────────────────────────────────────────
+  ────────────────────────────────────────────────────────────
   wecom_aibot_worker 内的 pub/sub 订阅 task:
     on message → WecomAibotClient.send_text(WS frame)
 ```
-
-这样任何进程都可以"调 send_text"，而真正的 WS 写操作集中在 worker，串行可控。`WECOM_AIBOT_WS_URL` 为空时 worker 启动后立即退出，部署上跳过该渠道无成本。
 
 ## 3. 主动触达（Phase-2 P2）
 
@@ -578,40 +545,3 @@ T0+60min  客户再次发消息 → mint 新 session_id
 | **LLM 负责合并而非代码？** | 语义冲突只有 LLM 能理解 | "客户说不吃辣" vs "今天点了麻辣锅" → LLM 判断是临时例外还是偏好变更 |
 | **recall_memory 与 search 分离？** | 一个查客户历史，一个查共享知识 | recall 带 recency decay（旧事件权重低），search 不带（产品信息无新旧）|
 
-## 8. MCP 工具调用流（Phase-2 P1）
-
-```
-启动时（main.py lifespan）：
-  parse_servers(MCP_SERVERS_JSON) → [MCPServerConfig, ...]
-  registry = MCPRegistry(configs, cache, ...)
-  await registry.connect_all():
-    for cfg in configs:
-        client = MCPClient(cfg)
-        client.connect():
-            stack = AsyncExitStack()
-            transport = stdio_client(...) | streamablehttp_client(...) | sse_client(...)
-            session = ClientSession(transport)
-            await session.initialize()
-        listing = client.list_tools()
-        for tool in listing.tools:
-            registry._tools.append(_build_langchain_tool(client, tool))
-              ← StructuredTool with args_schema 由 inputSchema 动态生成
-
-build_graph(checkpointer, extra_tools=registry.tools)：
-  AGENT_TOOLS + extra_tools 一起绑给 LLM 也一起喂给 ToolNode
-```
-
-工具调用：
-
-```
-agent_node → LLM 决定调 "products__get_status(order_id='ORD123')" →
-ToolNode 路由到对应 StructuredTool →
-  内部闭包：
-    1. 非写类工具：cache.get(server_id, tool_name, args)；命中 → 直接返回
-    2. client.call_tool(name, args)  # JSON-RPC over transport
-    3. 非写类：cache.put(...)
-    4. _extract_text(result) → 字符串返回给 ToolNode
-ToolNode 包装为 ToolMessage → state.messages 追加 → agent 继续看到工具结果
-```
-
-写类工具（按 `MCPServerConfig.write_tools` 配置）跳过缓存。
