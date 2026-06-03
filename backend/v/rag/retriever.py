@@ -21,8 +21,7 @@ from backend.v.utils.logging import get_logger
 
 _log = get_logger("rag.retriever")
 
-try:
-    from pymilvus import (
+from pymilvus import (
         AnnSearchRequest,
         DataType,
         Function,
@@ -30,14 +29,6 @@ try:
         MilvusClient,
         WeightedRanker,
     )
-except ImportError:
-    # Defensive fallback for environments where pymilvus is not yet installed
-    MilvusClient = None
-    AnnSearchRequest = None
-    WeightedRanker = None
-    DataType = None
-    Function = None
-    FunctionType = None
 
 DEFAULT_TOP_K = 5
 MAX_TOP_K = 20
