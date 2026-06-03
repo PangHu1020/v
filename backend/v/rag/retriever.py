@@ -19,9 +19,8 @@ from pydantic import BaseModel, Field
 from backend.v.configs.base import get_settings
 from backend.v.utils.logging import get_logger
 
-_log = get_logger("rag.retriever")
-
-from pymilvus import (
+try:
+    from pymilvus import (
         AnnSearchRequest,
         DataType,
         Function,
@@ -29,6 +28,15 @@ from pymilvus import (
         MilvusClient,
         WeightedRanker,
     )
+except ImportError:
+    AnnSearchRequest = None
+    DataType = None
+    Function = None
+    FunctionType = None
+    MilvusClient = None
+    WeightedRanker = None
+
+_log = get_logger("rag.retriever")
 
 DEFAULT_TOP_K = 5
 MAX_TOP_K = 20

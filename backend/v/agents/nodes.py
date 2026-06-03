@@ -201,6 +201,14 @@ async def agent_node(
     return {"messages": [result.message]}
 
 
+async def agent_fast_node(
+    state: CustomerServiceState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """Tool-free agent for general intent — no tool binding, lower latency."""
+    return await agent_node(state, config, tools=[])
+
+
 async def exit_node(state: CustomerServiceState) -> dict[str, Any]:
     """Terminal log point."""
     _log.debug(

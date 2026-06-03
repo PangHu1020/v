@@ -38,5 +38,6 @@ class CustomerServiceState(TypedDict, total=False):
     tool_error_counts: dict[str, int]
     # Phase-3 Group E: intent routing + reflection
     intent: str
+    needs_reflection: bool  # set by intent_node; True only for refund/logistics
     reflection_retries: int
     reflection_failed: bool

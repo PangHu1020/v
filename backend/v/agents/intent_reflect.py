@@ -73,7 +73,10 @@ async def intent_node(
         confidence=ir.confidence,
         elapsed_ms=int((time.perf_counter() - started) * 1000),
     )
-    return {"intent": ir.intent}
+    return {
+        "intent": ir.intent,
+        "needs_reflection": ir.intent in {"refund", "logistics"},
+    }
 
 
 class ReflectionResult(BaseModel):
