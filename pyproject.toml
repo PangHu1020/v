@@ -28,6 +28,7 @@ dependencies = [
     "mmh3>=5.0",
     "python-multipart>=0.0.9",
     "websockets>=13",
+    "pymilvus>=2.5.0",
 ]
 
 [dependency-groups]
@@ -78,7 +79,8 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"backend/test/**/*.py" = ["S", "ASYNC"]
+"backend/test/**/*.py" = ["S", "ASYNC", "E501"]
+"backend/v/rag/retriever.py" = ["E501"]
 
 [tool.ruff.format]
 quote-style = "double"

@@ -187,6 +187,27 @@ class SkillSettings(BaseSettings):
     """Top-K skills to inject per matched turn. 0 disables injection."""
 
 
+class MilvusSettings(BaseSettings):
+    """Milvus vector database configuration."""
+
+    model_config = SettingsConfigDict(**_COMMON, env_prefix="MILVUS_")
+
+    uri: str = "http://localhost:19530"
+    token: str = ""
+    collection_name: str = "knowledge_chunks"
+
+
+class RAGSettings(BaseSettings):
+    """RAG cascade search parameters."""
+
+    model_config = SettingsConfigDict(**_COMMON, env_prefix="RAG_")
+
+    min_score: float = Field(default=0.65, ge=0.0, le=1.0)
+    min_k: int = Field(default=3, ge=1)
+    dense_weight: float = Field(default=0.5, ge=0.0, le=1.0)
+    bm25_weight: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
 class AppSettings(BaseModel):
     """Composite settings handed to the FastAPI lifespan and to ``/v/`` modules."""
 
@@ -201,6 +222,8 @@ class AppSettings(BaseModel):
     wecom_aibot: WecomAibotSettings
     skill: SkillSettings
     langsmith: LangSmithSettings
+    milvus: MilvusSettings
+    rag: RAGSettings
 
 
 @lru_cache(maxsize=1)
@@ -223,4 +246,6 @@ def get_settings() -> AppSettings:
         wecom_aibot=WecomAibotSettings(),
         skill=SkillSettings(),
         langsmith=LangSmithSettings(),
+        milvus=MilvusSettings(),
+        rag=RAGSettings(),
     )

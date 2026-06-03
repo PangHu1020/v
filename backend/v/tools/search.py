@@ -36,11 +36,17 @@ async def search(
     cfg = config.get("configurable", {}) if config else {}
     pool = cfg.get("pg_pool")
     embedder = cfg.get("embedder")
-    if not (pool and embedder):
+    llm_caller = cfg.get("llm_caller")
+    if not embedder:
         return "（无法检索：缺少运行上下文）"
 
     rows = await _retriever.retrieve(
-        pool=pool, embedder=embedder, query=query, top_k=top_k, source_type=source_type
+        pool=pool,
+        embedder=embedder,
+        llm_caller=llm_caller,
+        query=query,
+        top_k=top_k,
+        source_type=source_type,
     )
     _log.info("tools.search.recalled", count=len(rows), source_type=source_type or "*")
     return _retriever.format(rows)

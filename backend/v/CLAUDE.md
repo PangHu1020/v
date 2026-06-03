@@ -101,7 +101,7 @@ Failure → fallback triggers: 30-second timeout (single attempt, no retry on pr
 - Global exceptions: `/backend/v/exceptions/`
 
 # Test and build commands
-- **Install**: `uv sync` (or `uv pip install -e .`)
+- **Install**: `uv sync` (or `uv pip install -e .`), the default environment path is `/mnt/data/conda_envs/agent`
 - **Lint & Format**: `ruff check . --fix && ruff format .`
 - **Run Unit Tests**: `pytest`
 - **Coverage Gate**: `pytest --cov=backend/v --cov-fail-under=80`
