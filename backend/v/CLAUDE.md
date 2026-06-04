@@ -18,7 +18,7 @@ Strict directory boundaries:
     - `working.py`: Redis-backed working memory (TTL 30 min). Single source of truth for active-session state and LangGraph checkpointer (hot path).
     - `session.py`: Postgres-backed session memory (consolidated working memory of completed/expiring sessions).
     - `long_term.py`: Postgres long-term memory split into two tables — see Memory Hierarchy below.
-    - `memory_extractor.py`: async coroutine that extracts profile + episodic memories from session memory using DeepSeek v4 flash with structured Pydantic output. Handles **dedup, conflict, and obsolescence** on write to `user_profile` and `memory_episodes`.
+    - `memory_extractor.py`: two public functions — `promote_to_long_term` (working memory → user_profile + event_memory, used at session-end) and `extract_from_messages` (raw history → ExtractionResult, used for short sessions that never triggered mid-session compression).
   - `/tools`: Built-in tools, all implemented via LangChain `@tool(parse_docstring=True)` so the docstring IS the tool description exposed to the LLM. Each tool's "when to use" lives in its own docstring, not in the system prompt.
     - `calculator` — safe AST eval (no `eval()`, whitelisted ops, exponent ≤ 64).
     - `search` — thin tool wrapper over `rag/retriever.py`; generic semantic recall over `agent.knowledge_chunk` (products / FAQ / policies). Does NOT recency-rank.
@@ -31,7 +31,6 @@ Strict directory boundaries:
     - `on_session_start`: inject full `user_profile` row.
     - `on_session_end`: final consolidation + extract long-term memory.
   - `/configs`: Pydantic settings models per module. All parameters initialized here.
-  - `/cron`: ARQ task definitions. **MVP scenarios**: `logistics_delivery_notification`, `ad_hoc_ad_push`, `repurchase_reminder`. Also hosts `consolidate_session` delayed-job worker.
   - `/utils`: Cross-cutting helpers (logging, retry, structured-output decoders).
 
 # Technology stack and versions
@@ -44,15 +43,15 @@ Strict directory boundaries:
 # Architecture constraints
 - **Passive Invocation**: `/v/` exposes interfaces; it is invoked by bus workers or ARQ. Never define FastAPI routes or auth here.
 - **Hierarchical Memory Lifecycle (CRITICAL)**:
-  - **Working Memory (Redis)**: current-session `messages` + LangGraph state. TTL 30 min. **Single source of truth on the hot path.** New session_id is created when 30-min silence elapses (long-term memory injection bridges continuity).
-  - **Session Memory (Postgres)**: consolidated summary of a session. Written by hook-triggered `summarizer` when (a) context exceeds token threshold, or (b) ARQ delayed job fires near TTL expiry, or (c) `on_session_end`. Cleared/archived after long-term extraction.
+  - **Working Memory (Redis)**: current-session `messages` + LangGraph state. TTL 30 min. **Single source of truth on the hot path.** New session_id created when 30-min silence elapses.
+    - **Mid-session** (token threshold): `compression_node` runs LLM extraction → writes `working_memories` to Redis + `event_memories` to PG. No profile update mid-session.
+    - **Session-end** (next message after silence): `_promote_prev_session` fires; if working memory is non-empty → promote directly (no extra LLM call); if empty (short session) → `extract_from_messages()` from checkpoint history then promote.
   - **Long-term Memory (Postgres, two tables)**:
     - `user_profile`: structured, **one row per `(channel, channel_user_id)`** (preferences, member level, recent-order summary, etc.). Fully injected into system prompt at every `on_session_start`.
     - `event_memory`: vectorized (Qwen `text-embedding-v4`, 1024-dim Matryoshka), pgvector HNSW index. Queried on-demand via the `recall_memory` tool with recency-weighted cosine ranking. Distinct from `agent.knowledge_chunk` (which `search` reads): event_memory is per-customer episodic; knowledge_chunk is the shared corpus.
     - Writes use `memory_extractor` with DeepSeek v4 flash + Pydantic structured output. **Dedup, conflict, and obsolescence are mandatory** — never blindly append.
 - **Subagent Has No Common Abstraction**: do NOT introduce a `BaseSubAgent`. Background analysts (summarizer, memory_extractor) are async coroutines. The `subagent` tool is a focused single-shot LLM call. They share only the `LLMCaller` utility.
 - **Skill**: install / update / list / pin operations are handled in `/skills`. Trust boundary enforced when loading executable skills.
-- **Cron (ARQ)**: scheduled outreach + delayed memory consolidation. Cron-generated outbound messages MUST be persisted to working memory before being pushed to the channel — they are part of conversation history, not fire-and-forget.
 
 # Built-in Tools (LangChain `@tool(parse_docstring=True)`)
 All tool descriptions live in their docstrings (single source of truth — the system prompt does NOT re-document them). Adding/changing a tool means editing the docstring; the LLM sees it via `parse_docstring=True`.
@@ -67,11 +66,9 @@ All providers must be OpenAI-compatible (use `ChatOpenAI(base_url=...)`).
 Routing keys read from `.env` (see `.env.example` for full list):
 
 ```
-LLM_MAIN_PRIMARY=deepseek-chat-v4-pro
-LLM_MAIN_FALLBACK=deepseek-chat-v4-flash      # same-family only in MVP
-LLM_SUMMARY=deepseek-chat-v4-flash
-LLM_MEMORY_EXTRACT=deepseek-chat-v4-flash
-EMBEDDING_MODEL=qwen-text-embedding-v4
+LLM_MAIN_PRIMARY=deepseek-v4-flash
+LLM_MAIN_FALLBACK=deepseek-v3.1
+EMBEDDING_MODEL=text-embedding-v4
 EMBEDDING_DIM=1024                            # Matryoshka — keep 1024 for HNSW
 ```
 

@@ -104,10 +104,12 @@ loop:
 handler 内部按顺序：
 
 ```
-1. session_id, minted = _resolve_session_id(redis, channel, user_id, silence=1800)
+1. session_id, minted, prev_session_id = _resolve_session_id(redis, ...)
    - 30 分钟以内：复用现有 session_id
-   - 否则：mint 新 uuid（长记忆兜底连续性）
-   - minted=True → INSERT agent.session 行（ON CONFLICT DO NOTHING）
+   - 否则：mint 新 uuid；prev_session_id = 刚过期的 session id
+   - minted=True → INSERT agent.session + fire-and-forget _promote_prev_session(prev_session_id)
+     → 如 working memory 非空：直接 promote_to_long_term（无额外 LLM 调用）
+     → 如 working memory 空（短对话）：extract_from_messages(history) → promote_to_long_term
 3. profile = on_session_start(...) → user_profile 注入到 state
 4. config = {
        "configurable": {
@@ -248,12 +250,7 @@ INSERT agent.    GET 命中             session 键自然过期    （+ 长记�
 │ Redis  last_seen:{ch}:{u}       TTL=3600s                   │  ← 静默判断
 │ Redis  proactive_log:{ch}:{u}   TTL=30d                     │  ← 主动消息历史
 └──────────────────────────────────────────────────────────────┘
-       ▼ on_interrupt: 整 thread 迁移 (transfer_to_human 触发)
-┌──────────── Cold Checkpointer (挂起期间) ───────��────┐
-│ PG  agent.checkpoints + checkpoint_blobs            │  ← LangGraph 官方 PostgresSaver
-│     + checkpoint_writes + checkpoint_migrations     │     仅 suspended session 使用
-└──────────────────────────────────────────────────────┘
-       ▼ consolidate_session (ARQ 延时任务，context 阈值 / TTL 临近时触发)
+       ▼ promote_to_long_term（session-end 触发，fire-and-forget）
 ┌─────────────── Event Memory (中期，30 天) ────────────��─┐
 │ PG  agent.event_memory                                  │  ← 一行 = 一条可召回的记忆片段
 │     content TEXT, embedding vector(1024), expires_at   │     Qwen text-embedding-v3, HNSW cosine
@@ -273,7 +270,7 @@ INSERT agent.    GET 命中             session 键自然过期    （+ 长记�
 
 记忆提取分为**两阶段**，均由 ARQ 后台任务驱动，与主对话流程完全解耦：
 
-#### 阶段一：consolidate_session（会话活跃期的增量提取）
+#### 阶段一：compression_node 中段提取（会话活跃期，token 阈值触发）
 
 **触发时机**（三选一，哪个先到触发哪个）：
 1. **Context 阈值**：`on_context_threshold` hook 检测到 checkpointer 中 messages 数 ≥ 配置阈值（默认 30 条）。
@@ -282,50 +279,12 @@ INSERT agent.    GET 命中             session 键自然过期    （+ 长记�
 
 **实现路径**：
 ```
-hooks/某处 → ctx["arq_pool"].enqueue(
-    "consolidate_session",
-    session_id=session_id,
-    defer_by=timedelta(seconds=...),  # TTL 临近时有 defer，context 阈值时立即
-)
-```
-
-**执行逻辑**（[backend/v/cron/tasks/consolidate_session.py](../backend/v/cron/tasks/consolidate_session.py)）：
-```python
-async def consolidate_session(ctx, *, session_id):
-    # 1. 读取 Redis checkpointer 中的完整 messages 历史
-    checkpointer = RedisCheckpointer(redis, session_id)
-    messages = await checkpointer.aget_tuple(config)
-    transcript = _format_history(messages)  # 转纯文本对话记录
-
-    # 2. 调 LLM（DeepSeek v4 flash）+ Pydantic structured output
-    result: ExtractionResult = await llm_caller.chat(
-        "summary", prompt, structured=ExtractionResult
-    )
-    # ExtractionResult = {
-    #   profile_updates: dict,        # 本阶段**忽略**（留给 promote_to_long_term）
-    #   working_memories: [MemoryEntry],  # 短期工作记忆，写 Redis
-    #   event_memories: [MemoryEntry],    # 中期事件记忆，写 PG + embed
-    # }
-
-    # 3. 双写：
-    # 3a. working_memories → Redis list working:{session_id} (TTL 1800s)
-    for entry in result.working_memories:
-        await append_working_memory(redis, session_id, entry)
-
-    # 3b. event_memories → agent.event_memory (带 embedding)
-    #     每条 content 调 embedder.aembed_documents([content])
-    #     INSERT ... expires_at = now() + 30 days
-    events_inserted = await insert_event_memories(
-        pool, channel, channel_user_id, session_id,
-        result.event_memories, embedder
-    )
-
-    # 4. 标记会话 status='consolidated'（幂等）
-    await conn.execute(
-        "UPDATE agent.session SET status='consolidated' WHERE session_id=$1",
-        session_id
-    )
-    return {"working_inserted": len(result.working_memories), "events_inserted": events_inserted}
+compression_node（graph 节点，token 超阈值时触发）：
+  1. LLM（memory_extract role）处理即将截断的 head 消息
+  2. working_memories → Redis RPUSH working:{session_id}（TTL 同 session）
+  3. event_memories → PG agent.event_memory + embed（call insert_event_memories）
+  4. 截断消息，注入 <compressed_history> + 最新 working memory 摘要
+  注意：不更新 user_profile（会话未结束）
 ```
 
 **关键特性**：
@@ -333,7 +292,7 @@ async def consolidate_session(ctx, *, session_id):
 - `event_memories` 是**持久记忆**：30 天 TTL，可被 `recall_memory` 工具跨会话召回，每条带 `embedding vector(1024)` + `importance` + `tags[]`。
 - `profile_updates` 在这一阶段**被忽略**——会话活跃时不修改 user_profile，避免频繁写冲突和中间态污染。
 
-#### 阶段二：promote_to_long_term（会话结束后的终局合并）
+#### 阶段二：session-end 固化（新 session mint 时触发，fire-and-forget）
 
 **触发时机**：
 会话彻底结束（30 分钟静默后，Redis working memory 自然过期）时，由外部逻辑（目前可能是手动触发或更上层的 session closer）调用。

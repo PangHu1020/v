@@ -2,7 +2,6 @@
 A state-driven AI agent platform for **external customer service over enterprise IM** (WeCom 智能机器人 WebSocket), built on LangGraph, FastAPI, Redis Streams, ARQ, and PostgreSQL (with pgvector).
 
 - **Primary mode**: reactive customer-service inquiries (被动答疑).
-- **Secondary mode**: proactive scheduled outreach (logistics notifications, ad pushes, repurchase reminders).
 - **Tenancy**: single-tenant in MVP; multi-tenancy is **deferred but not blocked** (do not bake in single-tenant assumptions that would force rewrites later).
 
 As an AI developer (Claude Code) working in this monorepo, your primary objective is to maintain strict architectural boundaries and adhere to a test-driven development lifecycle.
@@ -24,11 +23,7 @@ You MUST strictly follow this execution sequence. Do NOT skip steps:
 NEVER bypass layers to create shortcuts.
 
 **1. Reactive Workflow (Customer Initiates Inquiry)**
-`Customer` → `WeCom 智能机器人 WS` → `wecom_aibot_worker` (**500ms debounce + normalize** to `SystemMessage`) → `/app/bus` (Redis Streams, sharded by `(channel, channel_user_id)`, **strict per-shard serial**) → `Worker` consumes → calls `/v/agents` (LangGraph) → Agent uses `/v/tools` → reply pushed back via Redis pub/sub → `WecomAibotClient` → `Customer`.
-
-**2. Proactive Workflow (System Initiates Outreach)**
-`/v/cron` (ARQ scheduled task) → calls `/v/agents` to generate context-aware message → writes to `/v/memory` (CRITICAL — proactive output is part of conversation history) → pushes to `/app/bus` → `Channel` → `Customer`.
-MVP scenarios: **logistics delivery notification**, **ad-hoc ad push**, **repurchase reminder**.
+`Customer` → `WeCom 智能机器人 WS` → `wecom_aibot_worker` (**500ms debounce + normalize** to `SystemMessage`) → `/app/bus` (Redis Streams, sharded by `(channel, channel_user_id)`, **strict per-shard serial**) → `Worker` consumes → calls `/v/agents` (LangGraph) → Agent uses `/v/tools` → reply via Redis pub/sub → `WecomAibotClient` → `Customer`. On session expiry (30-min silence): working memory is promoted to long-term storage inline (no external queue).
 
 
 # Project structure and corresponding functions
@@ -48,7 +43,6 @@ MVP scenarios: **logistics delivery notification**, **ad-hoc ad push**, **repurc
   - `agent` schema: agent memory, sessions, checkpointer, user_profile, event_memory, knowledge_chunk (with pgvector).
   - `dw` schema: business data warehouse (migrated from legacy `dw.sql`, originally MySQL).
   - `meta` schema: NL2SQL semantic metadata (migrated from legacy `meta.sql`, originally MySQL).
-- **Bus = Redis Streams; Cron = ARQ**: do not conflate them. Streams handle reactive ordering and replay; ARQ handles delayed/scheduled jobs (cron + memory consolidation).
 - **User Identity (MVP)**: primary key is `(channel, channel_user_id)`. Cross-channel merging is deferred; reserve a `user_alias` table for future use.
 
 # Coding conventions

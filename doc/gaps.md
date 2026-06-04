@@ -165,7 +165,7 @@ MCP 层已整体删除。此条目不适用。
 
 Phase-2 已落地：P0 Slack handoff / P2 ARQ Cron / P3 长记忆 / 通用 subagent / P4 Skill 加载器。（P1 MCP 已移除。）
 
-Phase-3 进度：Group A（启动健康自检）/ B（token 计数器）/ C（三层记忆 + 中段压缩）/ D（工具死循环 + 熔断）/ E（intent / reflection 节点）/ G（WeCom 智能机器人 WS 渠道，含独立 worker + Redis 出站通道）已合入 main。Group F（情绪预判接管）和 MCP 层已移除。剩下的是运维 / 性能 / 多租户三块。
+Phase-3 进度：Group A / B / C（三层记忆 + 中段压缩，已重设计为 inline，无 ARQ 依赖）/ D / E / G 已合入 main。Group F（情绪预判）和 MCP 层已移除，ARQ/cron 层已移除（内存固化改为 inline）。剩下的是 RAG 深度优化、可观测性、多租户三块。
 
 ### P0：可观测性 + 运维
 
@@ -235,5 +235,4 @@ Phase-3 进度：Group A（启动健康自检）/ B（token 计数器）/ C（�
 | Subagent 是单轮、无嵌套工具调用 | [backend/v/tools/subagent.py](../backend/v/tools/subagent.py) | 真有多步需求让父 agent 自己调，避免无界嵌套 |
 | Skill 匹配是关键词子串而不是向量 | [backend/v/skills/registry.py](../backend/v/skills/registry.py) | MVP 简单可解释；语义召回作为 P3 升级 |
 | LangGraph 节点用闭包而非 functools.partial | [backend/v/agents/graph.py](../backend/v/agents/graph.py) | partial 让 LangGraph 签名检测错过 config 参数 |
-| 主进程 + ARQ worker 两个进程 | [backend/app/cron_worker.py](../backend/app/cron_worker.py) | 主动任务可独立扩缩 + 故障隔离 |
 | LLM 直接产出"合并后 profile"而非写 merge 规则 | [backend/v/memory/memory_extractor.py](../backend/v/memory/memory_extractor.py) | 合并语义是任务级的；写规则会教条，让 LLM 看现有 + 新输入直接出 |

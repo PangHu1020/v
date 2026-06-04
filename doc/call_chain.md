@@ -75,9 +75,11 @@ HSET 累积 + asyncio task 定时器；500ms 后 `_flush_after_window` 触发 `d
 
 handler 由 [backend/app/bus/worker.py:make_bus_handler](../backend/app/bus/worker.py) 构造的闭包。
 
-### 5.1 解析 session_id
+### 5.1 解析 session_id 并触发 session-end 固化
 
 [backend/app/bus/worker.py:_resolve_session_id](../backend/app/bus/worker.py) — 30 分钟以内复用，否则 mint UUID + INSERT `agent.session`。
+
+新 session mint 时（`minted=True`），`_promote_prev_session(prev_session_id)` 作为 fire-and-forget task 异步触发：将上一个 session 的 working memory 固化为 user_profile + event_memory（有 working memory 直接 promote；无则 extract_from_messages(history) 后 promote）。
 
 ### 5.2 加载 user_profile
 
@@ -125,6 +127,10 @@ intent_node（flash LLM）分类意图 → agent_node（primary LLM）生成回�
 - `recall_memory(query)` → pgvector cosine + 时间衰减 over `agent.event_memory`（per-customer）
 - `calculator(expr)` → 安全 AST 求值
 - `subagent(task)` → 单轮 LLM 子任务
+
+
+
+compression_node 还负责中段记忆提取：截断前用 LLM 提取 working_memories → Redis + event_memories → PG；不更新 user_profile（会话仍活跃）。
 
 ### 6.3 reflection_node
 
