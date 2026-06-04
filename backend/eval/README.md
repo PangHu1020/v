@@ -106,25 +106,68 @@ Stage 拦截分布：202 : 100 : 35 ≈ **60% : 30% : 10%**
 
 索引：HNSW（M=16，efConstruction=64，metric=COSINE）+ SPARSE_INVERTED_INDEX（BM25）
 
-## 评测工具
+## 评测模块结构
+
+```
+backend/eval/
+  gen/           数据生成（catalog / QA / difficulty scorer）
+  retrieval/     检索质量评测（cascade pipeline / ablation）
+  generate/      生成质量评测（RAGAS 四指标）
+  system/        系统性能评测（E2E 延迟 + token 成本）
+  data/          共享数据目录（products/faq/qa/reports）
+  common.py      共享数据类 + IO 工具
+  seed_milvus.py Milvus 数据导入
+```
+
+## 数据准备
 
 | 脚本 | 功能 |
 |------|------|
-| `backend/eval/gen/expand_catalog.py` | LLM 扩写商品目录 → `data/products.jsonl` + `data/faq.jsonl` |
-| `backend/eval/gen/gen_qa.py` | 生成原始 QA 对 → `data/qa.jsonl` |
-| `backend/eval/gen/gen_medium_qa.py` | 补充 medium 难度 QA，平衡数据集分布 |
-| `backend/eval/gen/score_difficulty.py` | LLM 对每条 query 打难度分，写回 `data/qa.jsonl` |
-| `backend/eval/seed_milvus.py` | Embed 语料并写入 Milvus collection |
-| `backend/eval/run_eval.py` | 端到端检索评测（cascade pipeline） |
-| `backend/eval/run_ablation.py` | 单策略对比（dense/hybrid variants/rewrite+hybrid） |
+| `gen/expand_catalog.py` | LLM 扩写商品目录 → `data/products.jsonl` + `data/faq.jsonl` |
+| `gen/gen_qa.py` | 生成 tiered QA → `data/qa.jsonl` |
+| `gen/gen_medium_qa.py` | 补充 medium 难度 QA，平衡分布 |
+| `gen/score_difficulty.py` | LLM 语义难度打分（easy/medium/hard） |
+| `seed_milvus.py` | Embed 语料 → Milvus `knowledge_chunks` |
 
 ```bash
-# 一键重跑完整评测流程
 LLM_TIMEOUT_SECONDS=180 uv run python -m backend.eval.gen.expand_catalog
 LLM_TIMEOUT_SECONDS=180 uv run python -m backend.eval.gen.gen_qa
 LLM_TIMEOUT_SECONDS=180 uv run python -m backend.eval.gen.gen_medium_qa --count 80
 LLM_TIMEOUT_SECONDS=180 uv run python -m backend.eval.gen.score_difficulty
 uv run python -m backend.eval.seed_milvus
-uv run python -m backend.eval.run_eval
-uv run python -m backend.eval.run_ablation --no-rewrite  # 快速，不含 LLM rewrite
+```
+
+## 检索评测（`retrieval/`）
+
+| 脚本 | 功能 |
+|------|------|
+| `retrieval/run_eval.py` | 级联检索 recall/MRR/nDCG/hit，按 difficulty/tier/stage 分维度 |
+| `retrieval/run_ablation.py` | 单策略对比（dense / hybrid variants / rewrite+hybrid） |
+
+```bash
+uv run python -m backend.eval.retrieval.run_eval
+uv run python -m backend.eval.retrieval.run_ablation --no-rewrite
+```
+
+## 生成质量评测（`generate/`）
+
+RAGAS 四指标：**Faithfulness** / **ContextRecall** / **AnswerRelevancy** / **AnswerCorrectness**
+
+每条 QA 用真实 Milvus retriever 召回上下文，LLM 生成回答，与 `qa.jsonl` 参考答案对比。
+
+```bash
+LLM_TIMEOUT_SECONDS=180 uv run python -m backend.eval.generate.run_generate_eval
+uv run python -m backend.eval.generate.run_generate_eval --limit 50         # smoke
+uv run python -m backend.eval.generate.run_generate_eval --difficulty hard   # 仅困难
+```
+
+## 系统性能评测（`system/`）
+
+E2E 延迟（mean/p50/p95/p99）+ token 消耗 + 成本估算（¥/轮）。
+运行完整 `graph.ainvoke`（enter→intent→agent→reflect）per query，LangChain callback 统计 token。
+成本单价在 `system/run_system_eval.py::PRICE_PER_1M` 中配置（默认 deepseek-v4-flash ¥0.5/¥1.5 per 1M）。
+
+```bash
+uv run python -m backend.eval.system.run_system_eval
+uv run python -m backend.eval.system.run_system_eval --limit 50
 ```
