@@ -133,7 +133,7 @@ class TestRetrieveCascade:
         )
 
         client.create_collection.assert_called_once()
-        assert client.create_index.call_count == 2
+        assert client.create_index.call_count == 1
         client.load_collection.assert_called_once()
 
     @patch("backend.v.rag.retriever.MilvusClient")

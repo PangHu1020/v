@@ -65,7 +65,7 @@ class TestLLMSettings:
 class TestEmbeddingSettings:
     def test_defaults_match_locked_decision(self) -> None:
         settings = _no_env_file(EmbeddingSettings)
-        assert settings.model == "qwen-text-embedding-v4"
+        assert settings.model == "text-embedding-v4"
         assert settings.dim == 1024
 
 

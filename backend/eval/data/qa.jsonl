@@ -1,0 +1,329 @@
+{"qa_id": "QA0001", "query": "iPhone 15 Pro 多少钱", "gold_source_type": "product", "gold_source_ids": ["P001"], "tier": "plain", "answer": "iPhone 15 Pro 售价为 8999 元。"}
+{"qa_id": "QA0002", "query": "哎，那个iPhone 15 Pro现在得多少钱啊，就是苹果新出那个，贵不贵？", "gold_source_type": "product", "gold_source_ids": ["P001"], "tier": "colloquial", "answer": "iPhone 15 Pro售价8999元，配备A17 Pro芯片和钛金属设计，是一款高端手机。"}
+{"qa_id": "QA0003", "query": "三星现役顶尖机皇的定价是多少", "gold_source_type": "product", "gold_source_ids": ["P002"], "tier": "synonym", "answer": "三星Galaxy S24 Ultra的售价为9699元，是性能强大的高端旗舰手机。"}
+{"qa_id": "QA0004", "query": "问了好几遍了三星S24 Ultra到底多少钱能不能一次说清楚", "gold_source_type": "product", "gold_source_ids": ["P002"], "tier": "noisy", "answer": "Galaxy S24 Ultra售价为9699元，提供256GB存储和12GB运行内存。"}
+{"qa_id": "QA0005", "query": "想买华为的卫星通话手机预算七千以内有没有运行内存12GB的", "gold_source_type": "product", "gold_source_ids": ["P003"], "tier": "multi_condition", "answer": "华为Mate 60 Pro售价6999元，支持卫星通话，运行内存12GB，符合您的需求。"}
+{"qa_id": "QA0006", "query": "Mate 60 Pro 的售价是多少？", "gold_source_type": "product", "gold_source_ids": ["P003"], "tier": "plain", "answer": "Mate 60 Pro 的售价为6999元。"}
+{"qa_id": "QA0007", "query": "那个戴森新出的V15吸尘器啊，得多少钱嘞，能不能给我说说？", "gold_source_type": "product", "gold_source_ids": ["P004"], "tier": "colloquial", "answer": "戴森V15吸尘器售价为4990元，吸力230AW，续航60分钟，带激光探测和HEPA过滤。"}
+{"qa_id": "QA0008", "query": "这家公司新出的无绳除尘利器定价要多少银子？", "gold_source_type": "product", "gold_source_ids": ["P004"], "tier": "synonym", "answer": "戴森 V15 吸尘器售价为 4990 元。"}
+{"qa_id": "QA0009", "query": "催了半天到底这空调多少钱能不能说清楚", "gold_source_type": "product", "gold_source_ids": ["P005"], "tier": "noisy", "answer": "该空调售价3299元，型号为美的KFR-35GW，1.5匹新一级能效，适用15-23㎡。"}
+{"qa_id": "QA0010", "query": "美的的1.5匹新一级能效变频空调有没有低噪音的型号预算三千五左右", "gold_source_type": "product", "gold_source_ids": ["P005"], "tier": "multi_condition", "answer": "有，美的KFR-35GW售价3299元，1.5匹新一级能效变频，噪音值18dB(A)，符合预算。"}
+{"qa_id": "QA0011", "query": "耐克 Air Max 270 运动鞋的价格是多少？", "gold_source_type": "product", "gold_source_ids": ["P006"], "tier": "plain", "answer": "售价为1099元。"}
+{"qa_id": "QA0012", "query": "那个耐克 Air Max 270 运动鞋，就是那个网面的，大概多少钱一双啊？", "gold_source_type": "product", "gold_source_ids": ["P006"], "tier": "colloquial", "answer": "这款鞋的售价是1099元，网面鞋身，有270度Air气垫。"}
+{"qa_id": "QA0013", "query": "这家运动品牌的最新旗舰缓震款定价是多少？", "gold_source_type": "product", "gold_source_ids": ["P007"], "tier": "synonym", "answer": "阿迪达斯 Ultraboost 跑鞋售价为1299元。"}
+{"qa_id": "QA0014", "query": "能不能别让人猜了！Ultraboost跑鞋到底多少钱，给个准话行不行", "gold_source_type": "product", "gold_source_ids": ["P007"], "tier": "noisy", "answer": "阿迪达斯 Ultraboost 跑鞋售价为1299元。"}
+{"qa_id": "QA0015", "query": "优衣库的加厚保暖夹克有没有修身版型价格在四百以内的", "gold_source_type": "product", "gold_source_ids": ["P008"], "tier": "multi_condition", "answer": "有，优衣库Heattech保暖夹克售价399元，面料加厚，版型修身，适合0-10℃冬季通勤。"}
+{"qa_id": "QA0016", "query": "优衣库 Heattech 保暖夹克售价多少", "gold_source_type": "product", "gold_source_ids": ["P008"], "tier": "plain", "answer": "优衣库 Heattech 保暖夹克售价为399元。"}
+{"qa_id": "QA0017", "query": "诶，那个李维斯的501牛仔裤啊，到底卖多少钱一条嘞？", "gold_source_type": "product", "gold_source_ids": ["P009"], "tier": "colloquial", "answer": "售价是799元。经典直筒版型，纯棉丹宁面料，四季都能穿。"}
+{"qa_id": "QA0018", "query": "李维斯经典直筒牛仔长裤多少钱？", "gold_source_type": "product", "gold_source_ids": ["P009"], "tier": "synonym", "answer": "售价为799元，采用100%纯棉丹宁面料，经典直筒版型，四季通用。"}
+{"qa_id": "QA0019", "query": "这个破咖啡到底多少钱一瓶，89还是99，标清楚行不行", "gold_source_type": "product", "gold_source_ids": ["P010"], "tier": "noisy", "answer": "售价为89元，净含量200g"}
+{"qa_id": "QA0020", "query": "雀巢金牌速溶咖啡200g高咖啡因的有没有保质期长于一年的", "gold_source_type": "product", "gold_source_ids": ["P010"], "tier": "multi_condition", "answer": "有的，这款咖啡净含量200克，保质期24个月（长于一年），且咖啡因含量高，符合您的需求。"}
+{"qa_id": "QA0021", "query": "蒙牛纯牛奶 250ml*12 多少钱", "gold_source_type": "product", "gold_source_ids": ["P011"], "tier": "plain", "answer": "售价为39.9元，是250ml*12盒的利乐砖包装，100%生牛乳无添加。"}
+{"qa_id": "QA0022", "query": "诶我想问一下那个蒙牛的纯牛奶，就是250ml一盒的那种，12盒一箱要多少钱啊？", "gold_source_type": "product", "gold_source_ids": ["P011"], "tier": "colloquial", "answer": "蒙牛纯牛奶250ml*12，售价39.9元，100%生牛乳，保质期6个月，脂肪含量3.6g/100ml。"}
+{"qa_id": "QA0023", "query": "乐氏经典未调味薯片每袋多重，价格怎么卖", "gold_source_type": "product", "gold_source_ids": ["P012"], "tier": "synonym", "answer": "该产品净含量150克，袋装，售价12.9元。"}
+{"qa_id": "QA0024", "query": "烦死了，乐乐事原味薯片到底多少钱一袋，能说清楚吗？", "gold_source_type": "product", "gold_source_ids": ["P012"], "tier": "noisy", "answer": "乐事原味薯片150g售价12.9元。"}
+{"qa_id": "QA0025", "query": "奥利奥的盒装巧克力夹心饼干388g保质期多久", "gold_source_type": "product", "gold_source_ids": ["P013"], "tier": "multi_condition", "answer": "保质期为12个月。"}
+{"qa_id": "QA0026", "query": "奥利奥巧克力夹心饼干多少钱", "gold_source_type": "product", "gold_source_ids": ["P013"], "tier": "plain", "answer": "奥利奥巧克力夹心饼干售价为19.9元，净含量388克。"}
+{"qa_id": "QA0027", "query": "那个Kindle Paperwhite电子书多少钱来着？", "gold_source_type": "product", "gold_source_ids": ["P014"], "tier": "colloquial", "answer": "售价为1099元。"}
+{"qa_id": "QA0028", "query": "亚马逊的墨水屏阅读器P014防水性能怎么样？", "gold_source_type": "product", "gold_source_ids": ["P014"], "tier": "synonym", "answer": "Kindle Paperwhite具备IPX8防水级别，可放心在泡澡时阅读。"}
+{"qa_id": "QA0029", "query": "这个破锅到底多少钱，烦死了，699元是不是最终价，能说清楚吗？", "gold_source_type": "product", "gold_source_ids": ["P015"], "tier": "noisy", "answer": "Instant Pot 多功能电压力锅售价为 699 元，商品文档中未提及任何额外价格说明。"}
+{"qa_id": "QA0030", "query": "Instant Pot 5.7L不锈钢内胆1000W的7合1电压力锅能不能24小时预约炖汤", "gold_source_type": "product", "gold_source_ids": ["P015"], "tier": "multi_condition", "answer": "可以，该锅支持24小时预约炖汤，兼具压力锅和慢炖锅功能。"}
+{"qa_id": "QA0031", "query": "华为MatePad Pro 13.2英寸 12+512GB WiFi版 售价多少", "gold_source_type": "product", "gold_source_ids": ["P016"], "tier": "plain", "answer": "华为MatePad Pro 13.2英寸 12+512GB WiFi版的售价为5499元。"}
+{"qa_id": "QA0032", "query": "华为那个新出的平板，就那个Pro 13.2英寸的，12+512的WiFi版，现在卖多少钱啊？带那个笔要加钱吗？", "gold_source_type": "product", "gold_source_ids": ["P016"], "tier": "colloquial", "answer": "该配置售价为5499元，星闪笔（M-Pencil）已包含在包装内，无需额外加钱。"}
+{"qa_id": "QA0033", "query": "搭载高通公司第三代8系芯片的徕卡光学四摄旗舰机，陶瓷后盖那个款式，现在买要花多少个大洋？", "gold_source_type": "product", "gold_source_ids": ["P017"], "tier": "synonym", "answer": "小米14 Ultra陶瓷版售价6999元，配备骁龙8Gen3处理器和5000万徕卡四摄。"}
+{"qa_id": "QA0034", "query": "我问的陶瓷版小米14 Ultra到底多少钱啊，6999元是吧？说清楚行不行！", "gold_source_type": "product", "gold_source_ids": ["P017"], "tier": "noisy", "answer": "小米14 Ultra 16GB+1TB陶瓷版售价6999元。"}
+{"qa_id": "QA0035", "query": "OPPO手机16GB+512GB内存支持卫星通信的型号有没有价格六千五左右的", "gold_source_type": "product", "gold_source_ids": ["P018"], "tier": "multi_condition", "answer": "有，OPPO Find X7 Ultra 卫星通信版16GB+512GB，售价6499元，支持天通卫星通话和短信。"}
+{"qa_id": "QA0036", "query": "OPPO Find X7 Ultra 卫星通信版 16GB+512GB 多少钱", "gold_source_type": "product", "gold_source_ids": ["P018"], "tier": "plain", "answer": "售价为6499元，支持天通卫星通话和短信，配备天玑9300处理器与100W闪充。"}
+{"qa_id": "QA0037", "query": "那个vivo x100 pro现在卖多少钱啊？就是那个蔡司相机的", "gold_source_type": "product", "gold_source_ids": ["P019"], "tier": "colloquial", "answer": "vivo X100 Pro 12GB+256GB售价为4999元，配备蔡司三摄和天玑9300处理器。"}
+{"qa_id": "QA0038", "query": "vivo X100 Pro 蔡司影像 12GB+256GB 星迹蓝 多少钱", "gold_source_type": "product", "gold_source_ids": ["P019"], "tier": "synonym", "answer": "该手机售价为4999元，拥有蔡司三摄、天玑9300芯片、5400mAh电池和IP68防水。"}
+{"qa_id": "QA0039", "query": "催了半天到底这Magic6 Pro多少钱能不能说清楚，16+512的别整废话", "gold_source_type": "product", "gold_source_ids": ["P020"], "tier": "noisy", "answer": "荣耀Magic6 Pro，16GB+512GB版本，售价为5999元。"}
+{"qa_id": "QA0040", "query": "荣耀Magic6 Pro有16GB+512GB的海湖青版本吗价格在六千以内的", "gold_source_type": "product", "gold_source_ids": ["P020"], "tier": "multi_condition", "answer": "有，16GB+512GB海湖青版本售价5999元，符合六千以内的预算。"}
+{"qa_id": "QA0041", "query": "小米Redmi Book Pro 16 2024款多少钱", "gold_source_type": "product", "gold_source_ids": ["P021"], "tier": "plain", "answer": "6999元"}
+{"qa_id": "QA0042", "query": "小米那个新出的笔记本红米Pro 16 2024款，搞了个32GB内存的那个，得多少钱啊？", "gold_source_type": "product", "gold_source_ids": ["P021"], "tier": "colloquial", "answer": "小米Redmi Book Pro 16 2024款，酷睿Ultra7，32GB+1TB，灰色，售价6999元。"}
+{"qa_id": "QA0043", "query": "索尼的顶级全包耳主动降噪耳机卖多少钱？", "gold_source_type": "product", "gold_source_ids": ["P022"], "tier": "synonym", "answer": "索尼WH-1000XM5售价2499元，支持自适应主动降噪和30小时续航。"}
+{"qa_id": "QA0044", "query": "说了半天这耳机多少钱，总给个准数行吗", "gold_source_type": "product", "gold_source_ids": ["P022"], "tier": "noisy", "answer": "索尼WH-1000XM5耳机售价2499元，黑色款，编号P022。"}
+{"qa_id": "QA0045", "query": "想要联想的小新Pad Pro屏幕大点12.7英寸内存8G存储256G的有没有", "gold_source_type": "product", "gold_source_ids": ["P023"], "tier": "multi_condition", "answer": "联想小新Pad Pro 12.7英寸，8GB+256GB WiFi版，售价1599元，满足需求。"}
+{"qa_id": "QA0046", "query": "联想小新Pad Pro 12.7英寸 8GB+256GB WiFi版 售价多少", "gold_source_type": "product", "gold_source_ids": ["P023"], "tier": "plain", "answer": "这款平板售价为1599元。"}
+{"qa_id": "QA0047", "query": "哎对了，那个华为FreeBuds 4E的耳机，就是陶瓷白色的那个，大概多少钱啊？", "gold_source_type": "product", "gold_source_ids": ["P024"], "tier": "colloquial", "answer": "华为FreeBuds 4E陶瓷白的售价是599元。"}
+{"qa_id": "QA0048", "query": "华为那款白色半入耳式无线耳塞能隔绝环境噪音吗，售价多少", "gold_source_type": "product", "gold_source_ids": ["P024"], "tier": "synonym", "answer": "华为FreeBuds 4E支持半开放主动降噪，售价599元，续航约4小时。"}
+{"qa_id": "QA0049", "query": "拜托能不能直接告诉我这个平板多少钱，别绕了行吗", "gold_source_type": "product", "gold_source_ids": ["P025"], "tier": "noisy", "answer": "三星Galaxy Tab A9+售价为1299元。"}
+{"qa_id": "QA0050", "query": "想买三星的11英寸平板4GB内存64GB储存有没有一千三左右的", "gold_source_type": "product", "gold_source_ids": ["P025"], "tier": "multi_condition", "answer": "三星Galaxy Tab A9+ 11英寸平板，4GB+64GB，售价1299元，符合您的预算和要求。"}
+{"qa_id": "QA0051", "query": "OnePlus 12 16GB+512GB 留白 5G手机 售价多少", "gold_source_type": "product", "gold_source_ids": ["P026"], "tier": "plain", "answer": "OnePlus 12 16GB+512GB 留白 5G手机售价为4799元。"}
+{"qa_id": "QA0052", "query": "诶，那个一加12手机，就是那个16+512的，现在卖多少钱来着？是4799块吗？", "gold_source_type": "product", "gold_source_ids": ["P026"], "tier": "colloquial", "answer": "OnePlus 12 16GB+512GB版本售价为4799元。"}
+{"qa_id": "QA0053", "query": "三星这款薄荷绿的平板电脑支持手写笔吗？", "gold_source_type": "product", "gold_source_ids": ["P027"], "tier": "synonym", "answer": "支持，配备S Pen触控笔，可用于笔记和绘画。"}
+{"qa_id": "QA0054", "query": "烦死了，转了半天了这平板到底多少钱，能不能给个准话", "gold_source_type": "product", "gold_source_ids": ["P027"], "tier": "noisy", "answer": "该款三星Galaxy Tab S9 FE平板电脑售价为2699元。"}
+{"qa_id": "QA0055", "query": "想买台索尼的手机12GB运存256GB预算八千以内有没有", "gold_source_type": "product", "gold_source_ids": ["P028"], "tier": "multi_condition", "answer": "索尼 Xperia 1 V 12GB+256GB 雾紫版售价7999元，符合预算，并搭载专业微单影像系统。"}
+{"qa_id": "QA0056", "query": "索尼 Xperia 1 V 微单手机 7999 元 参数", "gold_source_type": "product", "gold_source_ids": ["P028"], "tier": "plain", "answer": "索尼Xperia 1 V微单手机，12GB+256GB，售价7999元，4K HDR OLED屏幕，微单级三摄，Exmor T传感器。"}
+{"qa_id": "QA0057", "query": "诶，那个小米的Redmi Buds 5 Pro耳机，白色的那个，到底要花多少钱才能拿下啊？", "gold_source_type": "product", "gold_source_ids": ["P029"], "tier": "colloquial", "answer": "这款耳机的售价是399元。"}
+{"qa_id": "QA0058", "query": "小米的降噪耳机多少钱？", "gold_source_type": "product", "gold_source_ids": ["P029"], "tier": "synonym", "answer": "该商品售价为399元，是一款真无线降噪耳机。"}
+{"qa_id": "QA0059", "query": "烦死了，这华为MateBook D14到底几个钱？4999还是4999？给个准话行吗！", "gold_source_type": "product", "gold_source_ids": ["P030"], "tier": "noisy", "answer": "该商品售价为4999元。"}
+{"qa_id": "QA0060", "query": "想买华为的轻薄本MateBook D 14 2024款i5 16G内存 预算五千内有没有", "gold_source_type": "product", "gold_source_ids": ["P030"], "tier": "multi_condition", "answer": "有，华为MateBook D 14 2024款i5处理器16GB内存版售价4999元，符合预算。"}
+{"qa_id": "QA0061", "query": "魅族21 PRO 12GB+256GB 无界黑 5G手机 售价多少？", "gold_source_type": "product", "gold_source_ids": ["P031"], "tier": "plain", "answer": "魅族21 PRO 12GB+256GB 无界黑 5G手机售价为4299元。"}
+{"qa_id": "QA0062", "query": "哎那个魅族21 PRO现在多少钱啊，就是骁龙那个，12+256的", "gold_source_type": "product", "gold_source_ids": ["P031"], "tier": "colloquial", "answer": "这款手机售价是4299元。"}
+{"qa_id": "QA0063", "query": "飞利浦新款热风循环烤箱贵吗？", "gold_source_type": "product", "gold_source_ids": ["P032"], "tier": "synonym", "answer": "价格为1299元，属于中高端价位。"}
+{"qa_id": "QA0064", "query": "别废话了！这个飞利浦空气炸锅到底多少钱能说清楚吗", "gold_source_type": "product", "gold_source_ids": ["P032"], "tier": "noisy", "answer": "飞利浦空气炸锅HD9860/91的售价是1299元。"}
+{"qa_id": "QA0065", "query": "科沃斯T20 PRO的扫地机器人吸力5000帕有没有全链路除菌功能", "gold_source_type": "product", "gold_source_ids": ["P033"], "tier": "multi_condition", "answer": "有，该机型搭载全链路除菌功能，配备热风烘干拖布，可避免异味产生。"}
+{"qa_id": "QA0066", "query": "科沃斯扫地机器人 T20 PRO 多少钱", "gold_source_type": "product", "gold_source_ids": ["P033"], "tier": "plain", "answer": "科沃斯 T20 PRO 扫地机器人售价为 3299 元，编号 P033。"}
+{"qa_id": "QA0067", "query": "诶，那个小米的即热饮水机C1，就那个小个的，它卖多少钱啊？", "gold_source_type": "product", "gold_source_ids": ["P034"], "tier": "colloquial", "answer": "小米即热式饮水机C1的售价为399元。"}
+{"qa_id": "QA0068", "query": "小米C1即热饮水机的市场定价是多少？", "gold_source_type": "product", "gold_source_ids": ["P034"], "tier": "synonym", "answer": "小米C1即热式饮水机售价为399元。"}
+{"qa_id": "QA0069", "query": "烦死了，这款松下除湿机到底卖多少钱，能不能直接说价格", "gold_source_type": "product", "gold_source_ids": ["P035"], "tier": "noisy", "answer": "松下除湿机 F-WYT66XC 售价为 2199 元。"}
+{"qa_id": "QA0070", "query": "松下的除湿机 F-WYT66XC 除湿量15升适合50平米房间有净味功能吗", "gold_source_type": "product", "gold_source_ids": ["P035"], "tier": "multi_condition", "answer": "是的，该机型每日除湿量15升，适用面积40-70平方米，搭载nanoeX净味技术，适合50平米房间。"}
+{"qa_id": "QA0071", "query": "苏泊尔破壁料理机 SP66S 多少钱？", "gold_source_type": "product", "gold_source_ids": ["P036"], "tier": "plain", "answer": "苏泊尔破壁料理机 SP66S 的售价为599元。"}
+{"qa_id": "QA0072", "query": "那个苏泊尔的破壁机多少钱啊，就是那个SP66S，能预约不？", "gold_source_type": "product", "gold_source_ids": ["P036"], "tier": "colloquial", "answer": "售价599元，有12小时预约功能。"}
+{"qa_id": "QA0073", "query": "海尔的这款8公斤家用滚筒洗衣机是采用变频电机的吗？它节能效果怎么样，售价是多少钱？", "gold_source_type": "product", "gold_source_ids": ["P037"], "tier": "synonym", "answer": "是的，采用BLDC变频电机，一级能效，节能静音；售价2499元。"}
+{"qa_id": "QA0074", "query": "别磨蹭了海尔这洗衣机到底多少钱我等着买呢", "gold_source_type": "product", "gold_source_ids": ["P037"], "tier": "noisy", "answer": "售价为2499元。"}
+{"qa_id": "QA0075", "query": "九阳有没有7升大容量带可视窗口的空气炸锅五百多块钱的", "gold_source_type": "product", "gold_source_ids": ["P038"], "tier": "multi_condition", "answer": "九阳 KL70-V577 空气炸锅，7升容量，有可视窗口，价格599元，符合条件。"}
+{"qa_id": "QA0076", "query": "九阳空气炸锅 KL70-V577 多少钱", "gold_source_type": "product", "gold_source_ids": ["P038"], "tier": "plain", "answer": "这款空气炸锅售价599元，7升大容量，有可视窗口和360度热风循环。"}
+{"qa_id": "QA0077", "query": "那个石头的新款扫拖机器人P10 Pro多少钱啊？家里养猫的话用着咋样？", "gold_source_type": "product", "gold_source_ids": ["P039"], "tier": "colloquial", "answer": "售价3699元，适合养宠家庭，5500Pa大吸力配合全链路除菌，能有效清理宠物毛发和细菌。"}
+{"qa_id": "QA0078", "query": "石头P10 Pro这款智能家居清洁工具，它的价格是多少？", "gold_source_type": "product", "gold_source_ids": ["P039"], "tier": "synonym", "answer": "该产品售价为3699元。"}
+{"qa_id": "QA0079", "query": "别绕弯子了，这个美的蒸锅到底多少钱，能不能说清楚啊", "gold_source_type": "product", "gold_source_ids": ["P040"], "tier": "noisy", "answer": "这款美的多功能电蒸锅MZ-ZGC3222的售价是349元。"}
+{"qa_id": "QA0080", "query": "预算三百元左右美的的双层电蒸锅要有防干烧功能的有没有", "gold_source_type": "product", "gold_source_ids": ["P040"], "tier": "multi_condition", "answer": "有，美的MZ-ZGC3222电蒸锅349元，双层22L，304不锈钢，防干烧自动断电，适合蒸菜热饭。"}
+{"qa_id": "QA0081", "query": "飞利浦电动牙刷 HX9362/68 售价是多少", "gold_source_type": "product", "gold_source_ids": ["P041"], "tier": "plain", "answer": "飞利浦电动牙刷 HX9362/68 售价为 899 元。"}
+{"qa_id": "QA0082", "query": "那个飞利浦的HX9362电动牙刷现在卖多少钱一把啊，挺想买的～", "gold_source_type": "product", "gold_source_ids": ["P041"], "tier": "colloquial", "answer": "飞利浦电动牙刷HX9362/68售价为899元，属于钻石亮白系列。"}
+{"qa_id": "QA0083", "query": "博世这款风冷对开门冰箱容量多大，运行时安静吗？", "gold_source_type": "product", "gold_source_ids": ["P042"], "tier": "synonym", "answer": "总容积512升，采用智能变频压缩机，噪音值仅38分贝，节能静音。"}
+{"qa_id": "QA0084", "query": "能不能别再让我猜了，这冰箱到底多少钱，8690到底准不准确啊？", "gold_source_type": "product", "gold_source_ids": ["P042"], "tier": "noisy", "answer": "博世KAN92V150C冰箱售价8690元，编号P042，为一级能效的512升风冷无霜冰箱。"}
+{"qa_id": "QA0085", "query": "格力的除湿机DH40EF预算三千以内除湿量40升有没有", "gold_source_type": "product", "gold_source_ids": ["P043"], "tier": "multi_condition", "answer": "格力DH40EF除湿机售价2899元，除湿量40升/天，符合预算和除湿要求。"}
+{"qa_id": "QA0086", "query": "格力 DH40EF 除湿机多少钱", "gold_source_type": "product", "gold_source_ids": ["P043"], "tier": "plain", "answer": "格力除湿机DH40EF售价为2899元。"}
+{"qa_id": "QA0087", "query": "那个小熊的电蒸锅 DZG-40A1 大概多少钱啊，容量多大的呀", "gold_source_type": "product", "gold_source_ids": ["P044"], "tier": "colloquial", "answer": "售价299元，容量12升，三层设计，可蒸整鱼、包子、粗粮。"}
+{"qa_id": "QA0088", "query": "小熊三层电蒸炉容量有多大？能预约煮早餐吗", "gold_source_type": "product", "gold_source_ids": ["P044"], "tier": "synonym", "answer": "容量12升，支持12小时预约，可提前设定让早餐蒸好，方便省心。"}
+{"qa_id": "QA0089", "query": "你们这洗地机到底多少钱啊，催了半天都不说清楚，急死了", "gold_source_type": "product", "gold_source_ids": ["P045"], "tier": "noisy", "answer": "这款追觅H12 Pro洗地机售价4299元，支持自清洁和热风烘干功能。"}
+{"qa_id": "QA0090", "query": "追觅的洗地机H12 Pro有没有热风烘干功能预算四千左右", "gold_source_type": "product", "gold_source_ids": ["P045"], "tier": "multi_condition", "answer": "H12 Pro支持热风烘干滚刷，售价4299元，在四千左右预算内。清洗后自动烘干，防止发霉异味。"}
+{"qa_id": "QA0091", "query": "西门子嵌入式微波烤箱 HB23AB532W 售价多少", "gold_source_type": "product", "gold_source_ids": ["P046"], "tier": "plain", "answer": "售价为5299元，容量32升，微波功率900瓦，烧烤功率1450瓦。"}
+{"qa_id": "QA0092", "query": "那个西门子的嵌入式微波烤箱 HB23AB532W 大概要多少钱啊，能解冻还能上色吗？", "gold_source_type": "product", "gold_source_ids": ["P046"], "tier": "colloquial", "answer": "售价5299元。具备微波与烧烤功能二合一，可快速解冻并上色。"}
+{"qa_id": "QA0093", "query": "北鼎那款即热式饮水机多少钱？有什么安全功能？", "gold_source_type": "product", "gold_source_ids": ["P047"], "tier": "synonym", "answer": "售价1198元，具备童锁和防干烧双重安全保护功能。"}
+{"qa_id": "QA0094", "query": "催了半天到底这饮水机多少钱能不能说清楚", "gold_source_type": "product", "gold_source_ids": ["P047"], "tier": "noisy", "answer": "北鼎即热式饮水机 S801 售价为1198元。"}
+{"qa_id": "QA0095", "query": "小米加湿器2 Lite带紫外线除菌功能有没有静音的", "gold_source_type": "product", "gold_source_ids": ["P048"], "tier": "multi_condition", "answer": "有，该加湿器采用UV-C紫外线除菌，噪音≤32dB，运行静音。"}
+{"qa_id": "QA0096", "query": "米家智能除菌加湿器 2 Lite 多少钱", "gold_source_type": "product", "gold_source_ids": ["P048"], "tier": "plain", "answer": "米家智能除菌加湿器 2 Lite 售价为 299 元。"}
+{"qa_id": "QA0097", "query": "哎，那个New Balance的总统慢跑鞋，就是990v6那个，得多少钱一双啊？", "gold_source_type": "product", "gold_source_ids": ["P049"], "tier": "colloquial", "answer": "New Balance 990v6 总统慢跑鞋售价为1899元。"}
+{"qa_id": "QA0098", "query": "美利坚原产的New Balance 990v6总统跑鞋要花多少预算？", "gold_source_type": "product", "gold_source_ids": ["P049"], "tier": "synonym", "answer": "售价为1899元，是美产经典总统慢跑鞋升级款。"}
+{"qa_id": "QA0099", "query": "这破鞋到底多少钱，1390还是打折了，快说清楚行不行", "gold_source_type": "product", "gold_source_ids": ["P050"], "tier": "noisy", "answer": "亚瑟士 GEL-KAYANO 30 当前售价为 1390 元，文中未提及打折信息。"}
+{"qa_id": "QA0100", "query": "亚瑟士稳定支撑跑鞋KAYANO 30要九百以内的有没有", "gold_source_type": "product", "gold_source_ids": ["P050"], "tier": "multi_condition", "answer": "亚瑟士GEL-KAYANO 30售价为1390元，没有900元以内的款式。该款为旗舰级稳定支撑跑鞋，1390元。"}
+{"qa_id": "QA0101", "query": "索康尼 Triumph 21 顶级缓震跑鞋 售价多少", "gold_source_type": "product", "gold_source_ids": ["P051"], "tier": "plain", "answer": "索康尼 Triumph 21 顶级缓震跑鞋售价为1499元。"}
+{"qa_id": "QA0102", "query": "那个索康尼的Triumph 21跑鞋，就是那个顶级缓震的，要多少钱啊？", "gold_source_type": "product", "gold_source_ids": ["P051"], "tier": "colloquial", "answer": "售价1499元，是索康尼的顶级缓震跑鞋，采用PWRRUN PB中底，适合大体重跑者日常慢跑。"}
+{"qa_id": "QA0103", "query": "Hoka One One Clifton 9这双轻量缓震跑鞋定价如何", "gold_source_type": "product", "gold_source_ids": ["P052"], "tier": "synonym", "answer": "售价为1199元，具备加厚泡棉和滚动几何设计，提供平稳舒适的跑步体验。"}
+{"qa_id": "QA0104", "query": "催了半天到底这双Hoka跑鞋多少钱能不能说清楚", "gold_source_type": "product", "gold_source_ids": ["P052"], "tier": "noisy", "answer": "Hoka One One Clifton 9跑鞋售价1199元。"}
+{"qa_id": "QA0105", "query": "On昂跑的双层缓震公路跑鞋售价1590元有抗菌鞋垫吗", "gold_source_type": "product", "gold_source_ids": ["P053"], "tier": "multi_condition", "answer": "On昂跑 Cloudstratus 3 售价1590元，鞋垫为抗菌可拆卸 Ortholite，具备双层缓震性能。"}
+{"qa_id": "QA0106", "query": "On昂跑 Cloudstratus 3 售价是多少", "gold_source_type": "product", "gold_source_ids": ["P053"], "tier": "plain", "answer": "On昂跑 Cloudstratus 3 售价为1590元。"}
+{"qa_id": "QA0107", "query": "那个李宁的超轻20代跑步鞋嘞，就是那个ARBU001-1型号的，要多少钱一双啊，帮忙看看呗？", "gold_source_type": "product", "gold_source_ids": ["P054"], "tier": "colloquial", "answer": "售价为599元，这是一款轻量跑步鞋，鞋面采用贾卡织物，䨻科技中底提供回弹，适合慢跑和通勤。"}
+{"qa_id": "QA0108", "query": "李宁的这款轻量跑鞋大概多少钱？", "gold_source_type": "product", "gold_source_ids": ["P054"], "tier": "synonym", "answer": "李宁超轻20代跑步鞋售价为599元。"}
+{"qa_id": "QA0109", "query": "能不能说清楚这双鞋到底多少钱，急着下单呢，别整那些看不懂的参数", "gold_source_type": "product", "gold_source_ids": ["P055"], "tier": "noisy", "answer": "特步动力巢Pro跑鞋售价为429元，编号P055。"}
+{"qa_id": "QA0110", "query": "特步动力巢Pro跑鞋40码有没有碳板回弹80%以上", "gold_source_type": "product", "gold_source_ids": ["P055"], "tier": "multi_condition", "answer": "该款跑鞋中底嵌入碳纤维板，回弹率达80%以上，适合正常足弓，但未提及40码是否在售。"}
+{"qa_id": "QA0111", "query": "安踏创2.0 Pro氮科技跑步鞋多少钱", "gold_source_type": "product", "gold_source_ids": ["P056"], "tier": "plain", "answer": "该鞋售价为499元，采用氮气超临界A-FLASHEDGE缓震和A-WARP编织鞋面，后跟环绕TPU稳定片设计。"}
+{"qa_id": "QA0112", "query": "那个安踏创2.0 Pro的氮科技跑步鞋多少钱一双啊，是不是挺贵的？", "gold_source_type": "product", "gold_source_ids": ["P056"], "tier": "colloquial", "answer": "售价为499元。采用氮气超临界A-FLASHEDGE缓震，脚感软弹，后跟TPU稳定设计提升安全性。"}
+{"qa_id": "QA0113", "query": "361度那双全马跑鞋的定价在什么水平？", "gold_source_type": "product", "gold_source_ids": ["P057"], "tier": "synonym", "answer": "该跑鞋售价为699元，定位马拉松竞速，适合半马以上距离。"}
+{"qa_id": "QA0114", "query": "烦死了！问了好几次，这双飞燃PB到底多少钱？能不能说个准数", "gold_source_type": "product", "gold_source_ids": ["P057"], "tier": "noisy", "answer": "售价为699元，是361°马拉松竞速跑鞋，中底采用QU!KFLAME尼龙弹性体发泡材料，搭载全掌碳纤维板。"}
+{"qa_id": "QA0115", "query": "匹克态极6.0Pro跑鞋有没有适合公路跑的缓震好预算三百多的", "gold_source_type": "product", "gold_source_ids": ["P058"], "tier": "multi_condition", "answer": "匹克态极6.0 Pro跑鞋售价369元，搭载态极自适应缓震科技，适合公路路面，缓震效果好。"}
+{"qa_id": "QA0116", "query": "匹克态极 6.0 Pro 跑鞋多少钱？", "gold_source_type": "product", "gold_source_ids": ["P058"], "tier": "plain", "answer": "售价为369元。"}
+{"qa_id": "QA0117", "query": "那个斯凯奇的跑鞋，就是那个Go Run Ride 11，男生穿的，大概要多少钱啊，是在跑步用的那种吧？", "gold_source_type": "product", "gold_source_ids": ["P059"], "tier": "colloquial", "answer": "这款跑鞋售价699元，男款，采用Ultra Go中底缓震科技，适合公路跑步。"}
+{"qa_id": "QA0118", "query": "斯凯奇的缓震男跑鞋55200价格怎么样", "gold_source_type": "product", "gold_source_ids": ["P059"], "tier": "synonym", "answer": "售价为699元，采用Ultra Go中底和舒适柱科技，提供柔软回弹与稳定支撑。"}
+{"qa_id": "QA0119", "query": "这双鞋到底多少钱啊 发了三遍没人回 是不是不卖", "gold_source_type": "product", "gold_source_ids": ["P060"], "tier": "noisy", "answer": "错误理解，该鞋售价为898元，编号P060，有库存可售，并非不卖。"}
+{"qa_id": "QA0120", "query": "想买美津浓的缓震跑鞋价位八百多有没有适合日常训练的", "gold_source_type": "product", "gold_source_ids": ["P060"], "tier": "multi_condition", "answer": "美津浓Wave Rider 27售价898元，是缓震跑鞋，搭载WAVE+ENERZY科技，适合日常训练与长距离跑步。"}
+{"qa_id": "QA0121", "query": "萨洛蒙 Sense Ride 5 越野跑鞋多少钱？", "gold_source_type": "product", "gold_source_ids": ["P061"], "tier": "plain", "answer": "萨洛蒙 Sense Ride 5 越野跑鞋售价为998元。"}
+{"qa_id": "QA0122", "query": "那个萨洛蒙的Sense Ride 5越野鞋啊，就是那个跑山路用的，它卖多少钱呢，有998元没？", "gold_source_type": "product", "gold_source_ids": ["P061"], "tier": "colloquial", "answer": "SALOMON Sense Ride 5越野跑鞋售价为998元，专为泥地、碎石和山路设计，采用Contagrip大底和Energy Foam中底。"}
+{"qa_id": "QA0123", "query": "锐步的女款避震跑步鞋多少钱", "gold_source_type": "product", "gold_source_ids": ["P062"], "tier": "synonym", "answer": "售价549元，采用FloatRide Energy中底泡棉，具备轻质缓震特性。"}
+{"qa_id": "QA0124", "query": "别绕了，我就想知道这锐步跑鞋多少钱一双？", "gold_source_type": "product", "gold_source_ids": ["P062"], "tier": "noisy", "answer": "这款锐步 FloatZig 1 女士跑鞋售价为549元。"}
+{"qa_id": "QA0125", "query": "想要双布鲁克斯的缓震跑鞋预算1000左右适合日常慢跑的有吗", "gold_source_type": "product", "gold_source_ids": ["P063"], "tier": "multi_condition", "answer": "布鲁克斯Ghost 15售价1099元，搭载DNA LOFT v2缓震，适合日常慢跑。"}
+{"qa_id": "QA0126", "query": "Brooks Ghost 15 中性款缓震跑鞋多少钱？", "gold_source_type": "product", "gold_source_ids": ["P063"], "tier": "plain", "answer": "Brooks Ghost 15 中性款缓震跑鞋售价1099元。"}
+{"qa_id": "QA0127", "query": "诶那个迪卡侬的KD900跑鞋，就是那个竞速的，大概多少钱一双啊，有没有便宜点的？", "gold_source_type": "product", "gold_source_ids": ["P064"], "tier": "colloquial", "answer": "迪卡侬 Kiprun KD 900 轻量竞速跑鞋售价为499元，没有提到更便宜的版本。"}
+{"qa_id": "QA0128", "query": "你们男士的竞速轻量化跑鞋价格是多少？", "gold_source_type": "product", "gold_source_ids": ["P064"], "tier": "synonym", "answer": "这款鞋售价为499元，专为进阶跑者设计，适合公路和跑道跑。"}
+{"qa_id": "QA0129", "query": "催了半天到底这跑鞋多少钱能不能说清楚", "gold_source_type": "product", "gold_source_ids": ["P065"], "tier": "noisy", "answer": "必迈 Mile 42K Pro 潜能 碳板跑鞋 男款，售价399元。"}
+{"qa_id": "QA0130", "query": "必迈的碳板跑鞋四百以内有没有适合马拉松训练防滑的", "gold_source_type": "product", "gold_source_ids": ["P065"], "tier": "multi_condition", "answer": "有，必迈Mile 42K Pro潜能碳板跑鞋售价399元，全掌铲形碳板推进力强，DSP橡胶外底防滑，适合马拉松训练。"}
+{"qa_id": "QA0131", "query": "多威 战神 3 代 售价多少", "gold_source_type": "product", "gold_source_ids": ["P066"], "tier": "plain", "answer": "多威战神3代竞速训练跑鞋售价为359元。"}
+{"qa_id": "QA0132", "query": "哎那个多威的战神3代跑鞋要多少钱一双啊，有点想买了", "gold_source_type": "product", "gold_source_ids": ["P066"], "tier": "colloquial", "answer": "多威战神3代跑鞋售价359元。"}
+{"qa_id": "QA0133", "query": "这款哥伦比亚羽绒服在寒冬条件下的保暖效果如何？", "gold_source_type": "product", "gold_source_ids": ["P067"], "tier": "synonym", "answer": "采用奥米热能反射技术，适用-15°C至5°C，高效锁温，适合冬季户外徒步及日常通勤。"}
+{"qa_id": "QA0134", "query": "这个破夹克到底多少钱，1299还是多少，别模棱两可行不行", "gold_source_type": "product", "gold_source_ids": ["P067"], "tier": "noisy", "answer": "售价1299元，编号P067，明确标价，没有其他价格。"}
+{"qa_id": "QA0135", "query": "想买北面的1996羽绒服700蓬鹅绒保暖性好价格两千多的有吗", "gold_source_type": "product", "gold_source_ids": ["P068"], "tier": "multi_condition", "answer": "北面1996经典羽绒服Nuptse 700，鹅绒填充蓬松度700，防撕裂面料，售价2399元，保暖性与街头风格兼具。"}
+{"qa_id": "QA0136", "query": "The North Face 北面 1996 经典羽绒服 Nuptse 700 多少钱", "gold_source_type": "product", "gold_source_ids": ["P068"], "tier": "plain", "answer": "这款羽绒服售价为2399元，采用700蓬松度鹅绒填充和防撕裂面料。"}
+{"qa_id": "QA0137", "query": "那个狼爪的冲锋衣，就是那件硬的，大概多少钱啊？", "gold_source_type": "product", "gold_source_ids": ["P069"], "tier": "colloquial", "answer": "Jack Wolfskin 狼爪冲锋衣 Tectonite 2L 男士硬壳夹克售价为1599元。"}
+{"qa_id": "QA0138", "query": "狼爪的男士硬壳夹克，两层面料，防水透气性能怎样？", "gold_source_type": "product", "gold_source_ids": ["P069"], "tier": "synonym", "answer": "防水等级15000mm，透气率12000g/m²/24h，采用Tectonite 2L面料，全压胶接缝，可拆卸风帽，适合多变野外天气。"}
+{"qa_id": "QA0139", "query": "发个价格磨磨唧唧，Lululemon那条黑色瑜伽裤到底卖多少钱？", "gold_source_type": "product", "gold_source_ids": ["P070"], "tier": "noisy", "answer": "Lululemon 黑色 Align 高腰瑜伽裤 24寸售价为850元。"}
+{"qa_id": "QA0140", "query": "露露乐蒙的高腰瑜伽裤黑色24寸有没有Nulu面料支撑性好的", "gold_source_type": "product", "gold_source_ids": ["P070"], "tier": "multi_condition", "answer": "有，露露乐蒙Align高腰瑜伽裤24寸黑色售价850元，采用Nulu面料，柔滑亲肤，四面弹力，高腰设计提供运动支撑。"}
+{"qa_id": "QA0141", "query": "Marmot土拨鼠保暖抓绒中间层M-series Hoody多少钱？", "gold_source_type": "product", "gold_source_ids": ["P071"], "tier": "plain", "answer": "售价699元，编号P071。"}
+{"qa_id": "QA0142", "query": "嘿，那个Marmot土拨鼠的抓绒衣，叫啥M-series Hoody的，穿起来暖和么大概多少钱啊", "gold_source_type": "product", "gold_source_ids": ["P071"], "tier": "colloquial", "answer": "售价699元，200g/m²抓绒，速干防静电，可作中间层搭配硬壳，保暖性较好。"}
+{"qa_id": "QA0143", "query": "耐克这一季的秋装厚实款套头上衣价格多少？", "gold_source_type": "product", "gold_source_ids": ["P072"], "tier": "synonym", "answer": "Nike耐克Sportswear加绒套头卫衣售价429元，材质80%棉、20%聚酯纤维，适合秋冬穿搭。"}
+{"qa_id": "QA0144", "query": "能不能别光说衣服舒服到底多少钱啊，这卫衣到底卖不卖，429是不是最新价", "gold_source_type": "product", "gold_source_ids": ["P072"], "tier": "noisy", "answer": "Nike Sportswear 加绒套头卫衣售价为429元，编号P072，该价格是商品定价。"}
+{"qa_id": "QA0145", "query": "想买阿迪达斯的短款羽绒夹克90%白鸭绒保暖的有没有900元以内的", "gold_source_type": "product", "gold_source_ids": ["P073"], "tier": "multi_condition", "answer": "阿迪达斯女式短款羽绒夹克H57431，90%白鸭绒填充，售价899元，900元以内，立领护颈保暖。"}
+{"qa_id": "QA0146", "query": "Adidas 女式短款羽绒夹克 H57431 多少钱", "gold_source_type": "product", "gold_source_ids": ["P073"], "tier": "plain", "answer": "售价为899元，填充90%白鸭绒，充绒量约120g，立领拉链设计，适合运动或日常通勤。"}
+{"qa_id": "QA0147", "query": "诶，优衣库那个弹力卡其裤男的穿咋样啊，要多少钱一条来着？", "gold_source_type": "product", "gold_source_ids": ["P074"], "tier": "colloquial", "answer": "这条卡其裤售价299元，含棉97%和氨纶3%，修身直筒中腰，弹力面料贴合不易变形。"}
+{"qa_id": "QA0148", "query": "优衣库的男士中腰直筒裤，布料含氨纶那款，价格是两百九十九？", "gold_source_type": "product", "gold_source_ids": ["P074"], "tier": "synonym", "answer": "是的，该款中腰修身直筒裤材质含97%棉和3%氨纶，售价299元，适合通勤休闲穿搭。"}
+{"qa_id": "QA0149", "query": "这破保暖内衣卖699到底值不值啊 写了一大堆也不说清楚会不会起球", "gold_source_type": "product", "gold_source_ids": ["P075"], "tier": "noisy", "answer": "699元；材质为Polartec Power Grid聚酯纤维，速干排汗保暖，网格内里减少粘肤；文档未提及是否起球。"}
+{"qa_id": "QA0150", "query": "巴塔哥尼亚的男士保暖内衣保暖效果怎么样大概多少钱", "gold_source_type": "product", "gold_source_ids": ["P075"], "tier": "multi_condition", "answer": "售价699元，适用0℃至-10℃，面料Polartec Power Grid排汗保暖，适合滑雪或冬季打底。"}
+{"qa_id": "QA0151", "query": "H&M 男士牛仔夹克 0704293 多少钱", "gold_source_type": "product", "gold_source_ids": ["P076"], "tier": "plain", "answer": "售价为399元。"}
+{"qa_id": "QA0152", "query": "那个H&M的男款牛仔夹克，就那个编号0704293的，大概多少钱嘞？", "gold_source_type": "product", "gold_source_ids": ["P076"], "tier": "colloquial", "answer": "399元。"}
+{"qa_id": "QA0153", "query": "鸟家那件男夹克得多少钱？", "gold_source_type": "product", "gold_source_ids": ["P077"], "tier": "synonym", "answer": "售价3200元，为男款轻薄保暖棉服，适合5°C至15°C穿。"}
+{"qa_id": "QA0154", "query": "催什么催，说了半天，这始祖鸟棉服到底多少钱，能不能一次性说清楚", "gold_source_type": "product", "gold_source_ids": ["P077"], "tier": "noisy", "answer": "Arc'teryx 始祖鸟男款Atom LT轻薄保暖棉服售价3200元，编号P077。"}
+{"qa_id": "QA0155", "query": "想买件加拿大鹅的女款极寒派克大衣防风防水鹅绒填充八千左右有没有", "gold_source_type": "product", "gold_source_ids": ["P078"], "tier": "multi_condition", "answer": "有，Canada Goose女款Chilliwack派克大衣，8600元，北极科技面料防风防水，80%白鹅绒填充，适用零下30°C。"}
+{"qa_id": "QA0156", "query": "Canada Goose 女款 Chilliwack 派克大衣 4660L 多少钱", "gold_source_type": "product", "gold_source_ids": ["P078"], "tier": "plain", "answer": "售价为8600元。"}
+{"qa_id": "QA0157", "query": "诶，那个无印良品的格纹衬衫，男款的，就是那个蓝色格子那个，多少钱一件啊？", "gold_source_type": "product", "gold_source_ids": ["P079"], "tier": "colloquial", "answer": "这款Muji无印良品男款法兰绒格纹衬衫（浅灰蓝格）售价为298元。"}
+{"qa_id": "QA0158", "query": "无印良品男士格子衬衣多少钱？", "gold_source_type": "product", "gold_source_ids": ["P079"], "tier": "synonym", "answer": "Muji无印良品男款法兰绒格纹衬衫售价298元，为浅灰蓝格款式。"}
+{"qa_id": "QA0159", "query": "烦死了问了好几个客服，到底这个Dickies男款短裤卖多少钱非得打字才能说吗", "gold_source_type": "product", "gold_source_ids": ["P080"], "tier": "noisy", "answer": "该款Dickies男款工装短裤（编号P080）售价为249元。"}
+{"qa_id": "QA0160", "query": "Dickies男款黑色工装短裤有没有多口袋设计春夏穿要249元的", "gold_source_type": "product", "gold_source_ids": ["P080"], "tier": "multi_condition", "answer": "有，Dickies男款黑色工装短裤（编号P080）多口袋设计，适用春夏季节，售价249元。"}
+{"qa_id": "QA0161", "query": "Moncler Adrey 短款羽绒服售价多少", "gold_source_type": "product", "gold_source_ids": ["P081"], "tier": "plain", "answer": "Moncler 女款 Adrey 短款羽绒服售价为10800元。"}
+{"qa_id": "QA0162", "query": "那个Moncler的短款羽绒服咋样啊，就是那个Adrey，大概多少钱呀？", "gold_source_type": "product", "gold_source_ids": ["P081"], "tier": "colloquial", "answer": "Moncler Adrey女款短款羽绒服售价10800元，亮面尼龙材质，填充90%白鹅绒，有品牌Logo袖标。"}
+{"qa_id": "QA0163", "query": "探路者那件能拆内胆的外套保暖效果怎么样？", "gold_source_type": "product", "gold_source_ids": ["P082"], "tier": "synonym", "answer": "保暖效果好，内胆填充90%白鹅绒，适用温度-15℃至5℃。"}
+{"qa_id": "QA0164", "query": "能不能讲重点，这个探路者冲锋衣到底多少钱，别浪费我时间", "gold_source_type": "product", "gold_source_ids": ["P082"], "tier": "noisy", "answer": "这款探路者男款加厚三合一冲锋外套售价为899元。"}
+{"qa_id": "QA0165", "query": "波司登的羽绒服抗寒零下30度的中长款有吗1299元", "gold_source_type": "product", "gold_source_ids": ["P083"], "tier": "multi_condition", "answer": "是的，波司登BOSIDENG女士极寒系列中长款羽绒服B201423，售价1299元，抗寒零下30度，填充800+蓬松度鹅绒。"}
+{"qa_id": "QA0166", "query": "波司登 BOSIDENG 女士极寒系列中长款羽绒服 B201423 售价多少", "gold_source_type": "product", "gold_source_ids": ["P083"], "tier": "plain", "answer": "该羽绒服售价为1299元。"}
+{"qa_id": "QA0167", "query": "哎，Ubras那个无尺码的文胸，到底多少钱一个啊，穿着睡觉能行不？", "gold_source_type": "product", "gold_source_ids": ["P084"], "tier": "colloquial", "answer": "售价169元，材质为锦纶82%+氨纶18%，无钢圈、无痕、透气，可当睡眠内衣。"}
+{"qa_id": "QA0168", "query": "Ubras那款无钢圈的隐形小背心多少钱，摸起来软不软？", "gold_source_type": "product", "gold_source_ids": ["P084"], "tier": "synonym", "answer": "售价169元，材质为锦纶82%加氨纶18%，高弹面料，零束缚感，适合睡眠穿着。"}
+{"qa_id": "QA0169", "query": "别绕圈子了，这个三顿半24颗装到底多少钱？快点说清楚！", "gold_source_type": "product", "gold_source_ids": ["P085"], "tier": "noisy", "answer": "三顿半超即溶精品冻干咖啡粉24颗装售价为169元。"}
+{"qa_id": "QA0170", "query": "想买三顿半的冻干咖啡粉24颗装价格160多有没有3秒速溶的", "gold_source_type": "product", "gold_source_ids": ["P085"], "tier": "multi_condition", "answer": "三顿半超即溶精品冻干咖啡粉24颗装，售价169元，净含量72克，3秒溶于冰水。"}
+{"qa_id": "QA0171", "query": "伊利安慕希希腊风味酸奶 205g*12盒 售价多少", "gold_source_type": "product", "gold_source_ids": ["P086"], "tier": "plain", "answer": "伊利安慕希希腊风味酸奶205g*12盒售价为69.9元。"}
+{"qa_id": "QA0172", "query": "那个伊利安慕希的酸奶啊，12盒装的那个，得多少钱一箱呀？", "gold_source_type": "product", "gold_source_ids": ["P086"], "tier": "colloquial", "answer": "伊利安慕希希腊风味酸奶205g*12盒售价69.9元，是原味的，来自内蒙古，蛋白质含量高。"}
+{"qa_id": "QA0173", "query": "元气森林白桃味苏打气泡水整箱卖多少钱？", "gold_source_type": "product", "gold_source_ids": ["P087"], "tier": "synonym", "answer": "480毫升15罐装售价49.9元，0糖0脂0卡。"}
+{"qa_id": "QA0174", "query": "都在问这个气泡水到底多少钱一罐，你倒是说清啊，别老整那些花里胡哨的介绍！", "gold_source_type": "product", "gold_source_ids": ["P087"], "tier": "noisy", "answer": "这款元气森林白桃味苏打气泡水15罐装售价49.9元，折合每罐约3.33元。"}
+{"qa_id": "QA0175", "query": "良品铺子有没有750克独立小袋装每日坚果礼盒九十块左右能补充每日营养的", "gold_source_type": "product", "gold_source_ids": ["P088"], "tier": "multi_condition", "answer": "有。良品铺子每日坚果混合坚果礼盒750g，售价89元，30小袋独立装，科学配比补充每日营养。"}
+{"qa_id": "QA0176", "query": "良品铺子每日坚果混合坚果礼盒750g多少钱", "gold_source_type": "product", "gold_source_ids": ["P088"], "tier": "plain", "answer": "售价为89元，规格是750克，内含30小袋独立包装的坚果果干。"}
+{"qa_id": "QA0177", "query": "哎，那个农夫山泉的橙汁，就是NFC的那个，300ml乘10瓶那个，喝起来咋样啊，甜不甜的？", "gold_source_type": "product", "gold_source_ids": ["P089"], "tier": "colloquial", "answer": "不额外加糖，是水果自身的自然甜味，口感鲜甜清爽，富含维C，适合解腻。"}
+{"qa_id": "QA0178", "query": "农夫山泉的纯橙汁饮品10瓶装冷冻保存28天，价格59.9元？", "gold_source_type": "product", "gold_source_ids": ["P089"], "tier": "synonym", "answer": "是的，农夫山泉NFC鲜榨橙汁300ml*10瓶售价59.9元，保质期28天需冷藏。"}
+{"qa_id": "QA0179", "query": "这破咖啡到底多少钱一盒？问了三遍了能不能说清楚！", "gold_source_type": "product", "gold_source_ids": ["P090"], "tier": "noisy", "answer": "星巴克星选美式即溶咖啡12条装官方售价为89元。"}
+{"qa_id": "QA0180", "query": "星巴克那个即溶咖啡有没有0糖0脂的12条装美式风味？", "gold_source_type": "product", "gold_source_ids": ["P090"], "tier": "multi_condition", "answer": "有。星巴克星选美式风味即溶咖啡12条装（编号P090，售价89元）为0糖0脂，冷水热水即溶。"}
+{"qa_id": "QA0181", "query": "特仑苏梦幻盖纯牛奶 250ml*10包 多少钱", "gold_source_type": "product", "gold_source_ids": ["P091"], "tier": "plain", "answer": "售价68元，每100ml含3.6g优质乳蛋白，保质期6个月，源自限定牧场。"}
+{"qa_id": "QA0182", "query": "那个特仑苏的纯牛奶，就那个小瓶盖的，十包一箱的得多少钱啊？", "gold_source_type": "product", "gold_source_ids": ["P091"], "tier": "colloquial", "answer": "特仑苏梦幻盖纯牛奶250ml*10包，售价是68元。"}
+{"qa_id": "QA0183", "query": "这款黑咖啡的售价是多少？", "gold_source_type": "product", "gold_source_ids": ["P092"], "tier": "synonym", "answer": "这款隅田川意式经典冻干黑咖啡100g罐装的售价是69元。"}
+{"qa_id": "QA0184", "query": "买了这破咖啡半天不发货，到底多少钱能说清不？", "gold_source_type": "product", "gold_source_ids": ["P092"], "tier": "noisy", "answer": "该商品售价69元，为隅田川意式经典冻干黑咖啡100g罐装。"}
+{"qa_id": "QA0185", "query": "简爱的原味裸酸奶1.08kg桶装蛋白质含量多少适不适合代餐", "gold_source_type": "product", "gold_source_ids": ["P093"], "tier": "multi_condition", "answer": "蛋白质含量为2.9g/100g，无蔗糖无添加，适合代餐或烘焙。"}
+{"qa_id": "QA0186", "query": "简爱裸酸奶 原味1.08kg 多少钱", "gold_source_type": "product", "gold_source_ids": ["P093"], "tier": "plain", "answer": "售价为35.8元，净含量1.08kg，需2-6℃冷藏，保质期21天。"}
+{"qa_id": "QA0187", "query": "那个喜茶的青梅气泡水一箱12瓶要多少钱来着，贵不贵啊？", "gold_source_type": "product", "gold_source_ids": ["P094"], "tier": "colloquial", "answer": "一箱12瓶的售价是59.9元，属于平价饮品。"}
+{"qa_id": "QA0188", "query": "喜茶出品的含气青梅饮品一箱12罐多少钱？", "gold_source_type": "product", "gold_source_ids": ["P094"], "tier": "synonym", "answer": "59.9元一箱（500ml*12瓶），无糖无脂无能量，含真实青梅汁。"}
+{"qa_id": "QA0189", "query": "搞什么飞机这个燕麦奶到底多少钱能不能一下子说清楚", "gold_source_type": "product", "gold_source_ids": ["P095"], "tier": "noisy", "answer": "OATLY噢麦力咖啡大师燕麦奶1L装，售价为28元。"}
+{"qa_id": "QA0190", "query": "想买OATLY的咖啡大师燕麦奶1L装保质期到什么时候有没有", "gold_source_type": "product", "gold_source_ids": ["P095"], "tier": "multi_condition", "answer": "保质期为9个月，需在常温阴凉处储存。具体到期日期见产品包装所标注。"}
+{"qa_id": "QA0191", "query": "山姆海盐太妃糖500g多少钱", "gold_source_type": "product", "gold_source_ids": ["P096"], "tier": "plain", "answer": "山姆会员商店Member's Mark海盐太妃糖500g售价为69元。"}
+{"qa_id": "QA0192", "query": "哎那个山姆的海盐太妃糖多少钱一袋啊，感觉挺好吃的", "gold_source_type": "product", "gold_source_ids": ["P096"], "tier": "colloquial", "answer": "山姆海盐太妃糖500g售价69元，咸甜酥脆，含扁桃仁碎粒，袋装。"}
+{"qa_id": "QA0193", "query": "三得利那款带点酒精的白桃味饮料多少钱一罐？", "gold_source_type": "product", "gold_source_ids": ["P097"], "tier": "synonym", "answer": "该产品售价为13元，容量350ml，酒精度3%。"}
+{"qa_id": "QA0194", "query": "查了半天你倒是说清楚这酒多少钱一瓶？", "gold_source_type": "product", "gold_source_ids": ["P097"], "tier": "noisy", "answer": "三得利微醺鸡尾酒白桃味350ml罐装售价13元。"}
+{"qa_id": "QA0195", "query": "小罐茶金骏眉红茶礼盒装40g一级武夷山产区有没有199元的", "gold_source_type": "product", "gold_source_ids": ["P098"], "tier": "multi_condition", "answer": "有。小罐茶金骏眉红茶40g礼盒装，售价199元，一级，产自福建武夷山核心产区。"}
+{"qa_id": "QA0196", "query": "小罐茶金骏眉红茶40g礼盒装多少钱", "gold_source_type": "product", "gold_source_ids": ["P098"], "tier": "plain", "answer": "售价为199元，净含量40g（4g×10罐），一级武夷山核心产区高香红茶。"}
+{"qa_id": "QA0197", "query": "那个百草味的手撕素肉串，就香辣味的，200g的，到底多少钱一袋啊，能告诉我一下呗？", "gold_source_type": "product", "gold_source_ids": ["P099"], "tier": "colloquial", "answer": "该商品售价为16元，规格200g，是香辣味的百草味手撕素肉串。"}
+{"qa_id": "QA0198", "query": "百草味这款植物蛋白零食是辣的吗，一包多少钱", "gold_source_type": "product", "gold_source_ids": ["P099"], "tier": "synonym", "answer": "是香辣味；售价16元，净含量200g。"}
+{"qa_id": "QA0199", "query": "这破东西到底多少钱一箱59.9还是按罐的卖别糊弄我", "gold_source_type": "product", "gold_source_ids": ["P100"], "tier": "noisy", "answer": "售价是59.9元一箱，每箱6罐，330ml每罐。"}
+{"qa_id": "QA0200", "query": "瑞幸的生椰拿铁即饮咖啡因含量高不高保质期多长价格59.9的330ml六罐装", "gold_source_type": "product", "gold_source_ids": ["P100"], "tier": "multi_condition", "answer": "咖啡因含量≥100mg/罐，保质期9个月，规格为330ml*6罐，售价59.9元。"}
+{"qa_id": "QA0201", "query": "认养一头牛法式酸奶100g8袋家庭装多少钱", "gold_source_type": "product", "gold_source_ids": ["P101"], "tier": "plain", "answer": "售价32.8元。"}
+{"qa_id": "QA0202", "query": "那个认养一头牛的法式酸奶，100g8袋的那个家庭装哈，它到底多少钱一箱啊？能不能便宜点呀？", "gold_source_type": "product", "gold_source_ids": ["P101"], "tier": "colloquial", "answer": "售价32.8元。保质期21天需冷藏，蛋白质≥3.0g/100g，0添加明胶与防腐剂。"}
+{"qa_id": "QA0203", "query": "零卡零糖柠檬风味饮品多少钱一箱", "gold_source_type": "product", "gold_source_ids": ["P102"], "tier": "synonym", "answer": "该商品售价48元，每箱包含12罐480ml的柠檬冰茶味无糖茶饮料。"}
+{"qa_id": "QA0204", "query": "烦死了到底多少钱一箱这个柠檬茶，页面翻半天也没写清楚！", "gold_source_type": "product", "gold_source_ids": ["P102"], "tier": "noisy", "answer": "每箱（12罐）售价48元。"}
+{"qa_id": "QA0205", "query": "良品铺子高膳食纤维的原味黑麦面包500g礼盒装29.9元有没有", "gold_source_type": "product", "gold_source_ids": ["P103"], "tier": "multi_condition", "answer": "有，良品铺子黑麦全麦面包500g礼盒装，原味黑麦，29.9元，高膳食纤维，适合代餐。"}
+{"qa_id": "QA0206", "query": "良品铺子黑麦全麦面包500g礼盒装多少钱？", "gold_source_type": "product", "gold_source_ids": ["P103"], "tier": "plain", "answer": "售价29.9元，口味为原味黑麦，保质期180天，产于湖北武汉。"}
+{"qa_id": "QA0207", "query": "那个三只松鼠的每日坚果礼盒，就是那个750g的，一箱里面有多少袋啊？", "gold_source_type": "product", "gold_source_ids": ["P104"], "tier": "colloquial", "answer": "750g的礼盒内有30袋独立小包装，每袋是科学配比的6种坚果和3种果干。"}
+{"qa_id": "QA0208", "query": "三只松鼠那款混合果仁大礼包一斤半三十包卖多少钱", "gold_source_type": "product", "gold_source_ids": ["P104"], "tier": "synonym", "answer": "该产品售价69.9元，净含量750克，含30小袋，混合原味，不添加糖盐，适合孕妇儿童食用。"}
+{"qa_id": "QA0209", "query": "别绕了！这包百草味芒果干到底多少钱？", "gold_source_type": "product", "gold_source_ids": ["P105"], "tier": "noisy", "answer": "百草味芒果干128g袋装售价16.9元。"}
+{"qa_id": "QA0210", "query": "百草味芒果干128g甜酸口味保质期多久", "gold_source_type": "product", "gold_source_ids": ["P105"], "tier": "multi_condition", "answer": "保质期为365天。"}
+{"qa_id": "QA0211", "query": "旺旺仙贝家庭装 162g 多少钱？", "gold_source_type": "product", "gold_source_ids": ["P106"], "tier": "plain", "answer": "旺旺仙贝家庭装162g售价12.5元，酱油味经典米饼，适合全家分享。"}
+{"qa_id": "QA0212", "query": "哎，那个旺旺仙贝，就是那个家庭装的，一大袋的，多少钱一袋啊？", "gold_source_type": "product", "gold_source_ids": ["P106"], "tier": "colloquial", "answer": "旺旺仙贝家庭装162g袋装售价为12.5元，是经典酱油味米饼，适合全家分享。"}
+{"qa_id": "QA0213", "query": "来伊份的蜜汁肉干200克装卖多少钱？", "gold_source_type": "product", "gold_source_ids": ["P107"], "tier": "synonym", "answer": "25.9元一袋，200克，蜜汁口味，保质期180天，产自江苏南京。"}
+{"qa_id": "QA0214", "query": "别绕来绕去了，这猪肉脯到底多少钱一袋？", "gold_source_type": "product", "gold_source_ids": ["P107"], "tier": "noisy", "answer": "来伊份猪肉脯200g袋装售价为25.9元。"}
+{"qa_id": "QA0215", "query": "比比赞的咸蛋黄夹心海苔脆是袋装的吗多少钱一袋", "gold_source_type": "product", "gold_source_ids": ["P108"], "tier": "multi_condition", "answer": "该产品售价12.9元，袋装，净含量50g，咸蛋黄口味，保质期9个月。"}
+{"qa_id": "QA0216", "query": "比比赞咸蛋黄夹心海苔脆 50g 袋装多少钱", "gold_source_type": "product", "gold_source_ids": ["P108"], "tier": "plain", "answer": "比比赞咸蛋黄夹心海苔脆50g袋装售价12.9元，是品牌比比赞的休闲零食。"}
+{"qa_id": "QA0217", "query": "哎这个良品铺子的草莓干多少钱一罐啊，想买来尝尝", "gold_source_type": "product", "gold_source_ids": ["P109"], "tier": "colloquial", "answer": "良品铺子草莓干100克罐装售价19.9元，冻干工艺，开盖即食。"}
+{"qa_id": "QA0218", "query": "良品铺子冻干草莓一罐多少钱", "gold_source_type": "product", "gold_source_ids": ["P109"], "tier": "synonym", "answer": "售价19.9元，净含量100g，罐装冻干草莓，保质期12个月。"}
+{"qa_id": "QA0219", "query": "翻来翻去看半天，这个带小包的辣鸭锁骨到底多少钱一袋，能不能直接给个数", "gold_source_type": "product", "gold_source_ids": ["P110"], "tier": "noisy", "answer": "售价为25.8元一袋，规格200g，甜辣口味，独立小包装。"}
+{"qa_id": "QA0220", "query": "醉丝家的甜辣鸭锁骨是200g袋装的吗，保质期多长，有没有小包独立包装", "gold_source_type": "product", "gold_source_ids": ["P110"], "tier": "multi_condition", "answer": "是的，醉丝香辣鸭锁骨是200g袋装，保质期6个月，有独立小包随身带。"}
+{"qa_id": "QA0221", "query": "沃隆每日混合坚果500g多少钱", "gold_source_type": "product", "gold_source_ids": ["P111"], "tier": "plain", "answer": "售价为59.9元，净含量500克，每袋30小包。"}
+{"qa_id": "QA0222", "query": "哎那个沃隆的每日坚果，就是那个袋装的500g的，要多少钱一包啊，里面有啥果子没", "gold_source_type": "product", "gold_source_ids": ["P111"], "tier": "colloquial", "answer": "售价59.9元。配料包括扁桃仁、腰果、核桃、蔓越莓干、蓝莓干、榛子六种。"}
+{"qa_id": "QA0223", "query": "乳酸菌风味果酱夹心面包的单价和净重是多少？", "gold_source_type": "product", "gold_source_ids": ["P112"], "tier": "synonym", "answer": "该面包售价14.5元，净含量160克，袋装销售。"}
+{"qa_id": "QA0224", "query": "算了我直接问吧，这个小口袋面包到底多少钱一袋，别绕弯子", "gold_source_type": "product", "gold_source_ids": ["P112"], "tier": "noisy", "answer": "盐津铺子乳酸菌味小口袋面包160g袋装，售价14.5元。"}
+{"qa_id": "QA0225", "query": "百草味的散称绿豆糕有没有200g一袋的、保质期四个月的那种", "gold_source_type": "product", "gold_source_ids": ["P113"], "tier": "multi_condition", "answer": "百草味绿豆糕200g散称装，售价19.9元，保质期120天（约四个月），独立小包装，原味。"}
+{"qa_id": "QA0226", "query": "百草味绿豆糕200g售价多少", "gold_source_type": "product", "gold_source_ids": ["P113"], "tier": "plain", "answer": "售价19.9元，净含量200g，散称装，原味绿豆糕，保质期120天。"}
+{"qa_id": "QA0227", "query": "诶，良品铺子那个花椒锅巴，好像是袋装的，一袋140g那种，卖多少钱啊？", "gold_source_type": "product", "gold_source_ids": ["P114"], "tier": "colloquial", "answer": "良品铺子花椒锅巴袋装140g售价14.5元，花椒味酥脆咸香带微麻，非油炸更健康。"}
+{"qa_id": "QA0228", "query": "良品铺子的那款花椒锅巴多少钱一袋？", "gold_source_type": "product", "gold_source_ids": ["P114"], "tier": "synonym", "answer": "售价14.5元，140g袋装，花椒味，香酥微麻。"}
+{"qa_id": "QA0229", "query": "到底这个三只松鼠辣条大礼包多少钱啊，别让我再猜了，说清楚", "gold_source_type": "product", "gold_source_ids": ["P115"], "tier": "noisy", "answer": "三只松鼠辣条大礼包350g综合装售价29.9元。"}
+{"qa_id": "QA0230", "query": "三只松鼠的甜辣辣条大礼包350g综合装保质期多久", "gold_source_type": "product", "gold_source_ids": ["P115"], "tier": "multi_condition", "answer": "该产品保质期为180天。"}
+{"qa_id": "QA0231", "query": "来伊份椰丝球150g袋装多少钱？", "gold_source_type": "product", "gold_source_ids": ["P116"], "tier": "plain", "answer": "售价为16.8元，净含量150g，保质期90天，椰奶口味。"}
+{"qa_id": "QA0232", "query": "哎，那个来伊份的椰丝球，就那个袋装的，多少钱一袋啊？", "gold_source_type": "product", "gold_source_ids": ["P116"], "tier": "colloquial", "answer": "来伊份椰丝球150g袋装售价为16.8元。"}
+{"qa_id": "QA0233", "query": "比比赞的植物蛋白仿肉条要多少钱一袋？", "gold_source_type": "product", "gold_source_ids": ["P117"], "tier": "synonym", "answer": "比比赞手撕素肉卷每袋100克，售价12.9元，净含量100克，保质期240天。"}
+{"qa_id": "QA0234", "query": "这比比赞素肉卷到底多少钱一袋，12.9到底准不准能不能给个准话", "gold_source_type": "product", "gold_source_ids": ["P117"], "tier": "noisy", "answer": "该产品售价为12.9元每袋（100g），是标明的固定价格。"}
+{"qa_id": "QA0235", "query": "想买好丽友的巧克力味蘑菇造型零食预算二十以内有没有独立包装的", "gold_source_type": "product", "gold_source_ids": ["P118"], "tier": "multi_condition", "answer": "好丽友蘑菇力巧克力曲奇96g盒装售价12.8元，独立小包装，巧克力味，符合需求。"}
+{"qa_id": "QA0236", "query": "好丽友蘑菇力巧克力曲奇 96g 盒装多少钱", "gold_source_type": "product", "gold_source_ids": ["P118"], "tier": "plain", "answer": "好丽友蘑菇力巧克力曲奇 96g 盒装售价为12.8元。"}
+{"qa_id": "QA0237", "query": "那个味出道的糯米锅巴，就是袋装的那个，多少钱一袋啊？", "gold_source_type": "product", "gold_source_ids": ["P119"], "tier": "colloquial", "answer": "味出道糯米锅巴308g袋装售价19.9元，是原味传统工艺制作，口感酥脆不粘牙。"}
+{"qa_id": "QA0238", "query": "味出道这款传统米制小吃的容量和价格是多少？", "gold_source_type": "product", "gold_source_ids": ["P119"], "tier": "synonym", "answer": "该产品净含量为308g，售价19.9元，袋装原味糯米锅巴。"}
+{"qa_id": "QA0239", "query": "能不能别绕来绕去，这红薯脆条到底多少钱一袋，急死了", "gold_source_type": "product", "gold_source_ids": ["P120"], "tier": "noisy", "answer": "阿婆家红薯脆条202g袋装，售价14.5元。"}
+{"qa_id": "QA0240", "query": "想买阿婆家的袋装红薯脆条原味的有202克多少钱", "gold_source_type": "product", "gold_source_ids": ["P120"], "tier": "multi_condition", "answer": "阿婆家红薯脆条原味袋装，净含量202g，售价14.5元。"}
+{"qa_id": "QA0241", "query": "签收后几天内可以申请无理由退货？", "gold_source_type": "faq", "gold_source_ids": ["FAQ001"], "tier": "plain", "answer": "在不影响二次销售的情况下，可在签收后7天内申请无理由退货。"}
+{"qa_id": "QA0242", "query": "那个，我买了个东西不想要了，咋退啊？是不是随便就能退？", "gold_source_type": "faq", "gold_source_ids": ["FAQ001"], "tier": "colloquial", "answer": "商品不影响二次销售，签收后7天内可无理由退货，在订单详情页申请退款，审核通过后寄回，退款1-3天返还。"}
+{"qa_id": "QA0243", "query": "收到了商品但想取消订单，怎么操作退款流程？", "gold_source_type": "faq", "gold_source_ids": ["FAQ001"], "tier": "synonym", "answer": "在商品不影响二次销售前提下，签收后7天内可申请无理由退货，登录订单详情页点击“申请退款”，寄回后1-3天退款。"}
+{"qa_id": "QA0244", "query": "烦死了，尺码不对要换大号，到底怎么操作啊，运费谁出？", "gold_source_type": "faq", "gold_source_ids": ["FAQ002"], "tier": "noisy", "answer": "签收后7天内联系客服说明需求，退回原商品后发出正确尺码。非质量问题，来回运费通常由买家承担。"}
+{"qa_id": "QA0245", "query": "我买了件衣服尺码小了想换大一号的优衣库的怎么操作运费谁出", "gold_source_type": "faq", "gold_source_ids": ["FAQ002"], "tier": "multi_condition", "answer": "签收后7天内联系客服说明需求，退回原商品后换发正确尺码，来回运费通常由买家承担（质量问题除外）。"}
+{"qa_id": "QA0246", "query": "商品尺码不对如何换货", "gold_source_type": "faq", "gold_source_ids": ["FAQ002"], "tier": "plain", "answer": "签收后7天内联系客服说明需求，退回原商品后，商家发出正确尺码，运费通常由买家承担（质量问题除外）。"}
+{"qa_id": "QA0247", "query": "我那个订单都下了好几天了，物流咋一点动静都没有啊，是不是丢了呀", "gold_source_type": "faq", "gold_source_ids": ["FAQ003"], "tier": "colloquial", "answer": "通常下单后48小时内发货，物流超过3天未更新可能是快递延误或丢件。请提供订单号，我们会在24小时内核实或补发。"}
+{"qa_id": "QA0248", "query": "包裹发出后过了两天都没有运输记录，这正常吗？", "gold_source_type": "faq", "gold_source_ids": ["FAQ003"], "tier": "synonym", "answer": "下单后48小时内发货，物流超过3天未更新可能是延误或丢件，提供订单号可核查。"}
+{"qa_id": "QA0249", "query": "都三四天了物流动都不动一下，到底发没发货啊能不能给个准信", "gold_source_type": "faq", "gold_source_ids": ["FAQ003"], "tier": "noisy", "answer": "通常下单后48小时内发货，物流超过3天未更新可能是延误或丢件，请提供订单号，我们将核查并在24小时内答复或补发。"}
+{"qa_id": "QA0250", "query": "退货如果是因为质量问题运费是你们承担吗非质量问题呢", "gold_source_type": "faq", "gold_source_ids": ["FAQ004"], "tier": "multi_condition", "answer": "非质量问题退货来回运费由您承担；质量问题或发错货，运费由商家承担。建议购买退货运费险。"}
+{"qa_id": "QA0251", "query": "非质量问题退货谁出运费", "gold_source_type": "faq", "gold_source_ids": ["FAQ004"], "tier": "plain", "answer": "非质量问题退货来回运费由您承担；质量问题或发错货则由我们承担。"}
+{"qa_id": "QA0252", "query": "那个，我想问一下啊，如果我不想要了退货的话，那个运费是要我自己出吗？", "gold_source_type": "faq", "gold_source_ids": ["FAQ004"], "tier": "colloquial", "answer": "非质量问题退货，来回运费由您承担；质量问题或发错货则由我们承担运费。"}
+{"qa_id": "QA0253", "query": "作为付费用户，选购此物有价格优惠吗？", "gold_source_type": "faq", "gold_source_ids": ["FAQ005"], "tier": "synonym", "answer": "会员登录后系统自动计算折扣，通常比普通价低5%-20%，还享双倍积分。"}
+{"qa_id": "QA0254", "query": "我都是会员了，买这个到底能便宜多少，别给我说那些虚的", "gold_source_type": "faq", "gold_source_ids": ["FAQ005"], "tier": "noisy", "answer": "会员价通常比普通价低5%-20%，下单登录会员账号系统会自动算折扣，还享双倍积分。"}
+{"qa_id": "QA0255", "query": "我是黄金会员想买这个商品折扣能比普通价低多少", "gold_source_type": "faq", "gold_source_ids": ["FAQ005"], "tier": "multi_condition", "answer": "会员通常比普通价低5%-20%，还享双倍积分。"}
+{"qa_id": "QA0256", "query": "下单后积分多久到账？", "gold_source_type": "faq", "gold_source_ids": ["FAQ006"], "tier": "plain", "answer": "订单确认收货后，积分通常在24小时内自动到账。"}
+{"qa_id": "QA0257", "query": "那个，我想问一下哈，我买了东西之后，那个积分啥时候能到啊？咋查呢？", "gold_source_type": "faq", "gold_source_ids": ["FAQ006"], "tier": "colloquial", "answer": "订单确认收货后，积分通常在24小时内自动到账；您可在「我的-积分中心」查看明细。"}
+{"qa_id": "QA0258", "query": "购买商品已签收，奖励点数何时能显示？去哪里看记录？", "gold_source_type": "faq", "gold_source_ids": ["FAQ006"], "tier": "synonym", "answer": "交易完成确认后，积点一般一天内自动进账，可在个人账户的积点管理界面查阅。"}
+{"qa_id": "QA0259", "query": "烦死了，刚买的就坏了，免费修吗？别又要我出钱！", "gold_source_type": "faq", "gold_source_ids": ["FAQ007"], "tier": "noisy", "answer": "签收7天内可退换，15天内可免费维修，超过15天但保修期内免费维修，质量问题可免运费。"}
+{"qa_id": "QA0260", "query": "商品刚买一周就坏了，品牌是华为，能免费换新吗？", "gold_source_type": "faq", "gold_source_ids": ["FAQ007"], "tier": "multi_condition", "answer": "签收7天内质量问题可退换，华为商品适用此政策，可以免费换新。"}
+{"qa_id": "QA0261", "query": "商品购买不到一个月出现质量问题，可以免费维修吗？", "gold_source_type": "faq", "gold_source_ids": ["FAQ007"], "tier": "plain", "answer": "自签收之日起15天内可免费维修或换货，超过15天且在保修期内仍免费维修，但需承担来回运费（质量问题除外）。"}
+{"qa_id": "QA0262", "query": "哎我上次买东西忘开发票了，现在还能补开吗？怎么弄啊大佬", "gold_source_type": "faq", "gold_source_ids": ["FAQ008"], "tier": "colloquial", "answer": "可以补开。在「我的订单」中找到该订单，点击「申请发票」并填写信息即可。"}
+{"qa_id": "QA0263", "query": "下单时忘了勾选票务选项，事后还能申请凭证吗？具体步骤是啥？", "gold_source_type": "faq", "gold_source_ids": ["FAQ008"], "tier": "synonym", "answer": "可以补开发票。在「我的订单」中申请，电子发票约7个工作日内发至邮箱，纸质发票需自付邮费。"}
+{"qa_id": "QA0264", "query": "都下单完事了才告诉我要补发票，你们系统能不能弄智能点，现在怎么补开？", "gold_source_type": "faq", "gold_source_ids": ["FAQ008"], "tier": "noisy", "answer": "可以补开。在「我的订单」中找到该订单，点击「申请发票」填写信息。电子发票订单完成后7个工作日内推送至邮箱。"}
+{"qa_id": "QA0265", "query": "想用花呗分期买这个商品，支持12期吗？费率怎么算", "gold_source_type": "faq", "gold_source_ids": ["FAQ009"], "tier": "multi_condition", "answer": "支持花呗3/6/12期分期付款，具体费率以支付页面展示为准。"}
+{"qa_id": "QA0266", "query": "你们支持哪些支付方式？", "gold_source_type": "faq", "gold_source_ids": ["FAQ009"], "tier": "plain", "answer": "支持支付宝、微信支付、银行卡（借记卡/信用卡）及花呗，花呗可选择3、6、12期分期。"}
+{"qa_id": "QA0267", "query": "那个，你们家买个东西能用啥付钱啊，花呗行不行啊？", "gold_source_type": "faq", "gold_source_ids": ["FAQ009"], "tier": "colloquial", "answer": "支持支付宝、微信、银行卡及花呗支付，花呗可选3/6/12期分期，费率以支付页面为准。"}
+{"qa_id": "QA0268", "query": "手头有两张折扣码，是否可以叠加在同一个购物车？", "gold_source_type": "faq", "gold_source_ids": ["FAQ010"], "tier": "synonym", "answer": "同一订单只能使用一张优惠券，系统自动选择抵扣金额最大的应用。跨店满减可叠加，具体看结算页提示。"}
+{"qa_id": "QA0269", "query": "烦死了，问了好几次，两张券能不能一起用，到底行不行啊？", "gold_source_type": "faq", "gold_source_ids": ["FAQ010"], "tier": "noisy", "answer": "同一订单只能使用一张优惠券，系统自动选择抵扣金额最大的一张。"}
+{"qa_id": "QA0270", "query": "我有两张京东自营的满减券，能叠加用在一单买电脑吗？", "gold_source_type": "faq", "gold_source_ids": ["FAQ010"], "tier": "multi_condition", "answer": "同一订单只能使用一张优惠券，系统自动选抵扣金额最大的，但跨店满减可与店铺券叠加。"}
+{"qa_id": "QA0271", "query": "衣服退货需要什么条件", "gold_source_type": "faq", "gold_source_ids": ["FAQ011"], "tier": "plain", "answer": "吊牌未剪、未水洗、不影响二次销售，在订单内申请退货，审核通过后寄回即可。"}
+{"qa_id": "QA0272", "query": "哎我前几天买的那个衣服好像不太合适，咋退啊？是不是能退的？", "gold_source_type": "faq", "gold_source_ids": ["FAQ011"], "tier": "colloquial", "answer": "支持7天无理由退货，确保吊牌未剪、不影响二次销售，在订单内申请退货，按地址寄回即可。"}
+{"qa_id": "QA0273", "query": "买的这件衣裳不合身，想退掉，流程是什么？", "gold_source_type": "faq", "gold_source_ids": ["FAQ011"], "tier": "synonym", "answer": "保持吊牌完好、未清洗，不影响二次销售，在订单里申请退货，审核通过后寄回即可。"}
+{"qa_id": "QA0274", "query": "烦死了，鞋码小了到底能不能换啊，给个准话行不行", "gold_source_type": "faq", "gold_source_ids": ["FAQ012"], "tier": "noisy", "answer": "全新未穿、包装完好的商品30天内可申请换货，审核通过后寄回，收到后3天内发出新尺码。"}
+{"qa_id": "QA0275", "query": "鞋子尺码小了想换个码，全新未穿包装已保留，能不能申请换货", "gold_source_type": "faq", "gold_source_ids": ["FAQ012"], "tier": "multi_condition", "answer": "可以，30天内支持全新未穿、包装完好的商品换货，在线提交申请后寄回即可。"}
+{"qa_id": "QA0276", "query": "鞋子尺码小了，可以换货吗？", "gold_source_type": "faq", "gold_source_ids": ["FAQ012"], "tier": "plain", "answer": "鞋子尺码小了可以换货，前提是商品全新未穿且包装完好，在购买后30天内申请换货。"}
+{"qa_id": "QA0277", "query": "诶，我都等了好几天了那快递咋还没到呢，是不是给忘了啊？", "gold_source_type": "faq", "gold_source_ids": ["FAQ013"], "tier": "colloquial", "answer": "正常订单24小时内发货，偏远地区可能延迟。可在订单详情查看物流单号，或联系在线客服催单。"}
+{"qa_id": "QA0278", "query": "拍下的商品已经等了三天，物流信息迟迟没更新，是什么原因？", "gold_source_type": "faq", "gold_source_ids": ["FAQ013"], "tier": "synonym", "answer": "正常订单24小时发货，偏远地区或有延迟。建议查看订单物流单号，或联系在线客服催单。"}
+{"qa_id": "QA0279", "query": "三天了还没到货，你们这快递是蜗牛吗？到底什么时候能送到？", "gold_source_type": "faq", "gold_source_ids": ["FAQ013"], "tier": "noisy", "answer": "正常订单24小时内发货，偏远地区可能延迟。可查看订单物流单号或联系在线客服催单，我们会优先处理。"}
+{"qa_id": "QA0280", "query": "如果买的衣服质量有问题退货的话运费是不是你们出我拍了照片的", "gold_source_type": "faq", "gold_source_ids": ["FAQ014"], "tier": "multi_condition", "answer": "质量问题提供照片举证，审核通过后我们承担退货运费（最高15元）。"}
+{"qa_id": "QA0281", "query": "退货的快递费由谁承担", "gold_source_type": "faq", "gold_source_ids": ["FAQ014"], "tier": "plain", "answer": "非质量问题退货，运费由买家承担；质量问题审核通过后，我们承担退货运费（最高15元）。"}
+{"qa_id": "QA0282", "query": "那个如果我退货的话，不是东西坏掉那种，运费谁出啊？", "gold_source_type": "faq", "gold_source_ids": ["FAQ014"], "tier": "colloquial", "answer": "非质量问题退货，运费由买家承担。质量问题退货，提供照片审核通过后，我们承担最高15元退货运费。"}
+{"qa_id": "QA0283", "query": "有高级账户的话，购物能享受折扣吗？", "gold_source_type": "faq", "gold_source_ids": ["FAQ015"], "tier": "synonym", "answer": "VIP会员可享受全店商品9.5折优惠，此外还有生日双倍积分、专属客服和优先发货权益。"}
+{"qa_id": "QA0284", "query": "不是说VIP有优惠吗？怎么我买东西还是原价，到底打不打折啊", "gold_source_type": "faq", "gold_source_ids": ["FAQ015"], "tier": "noisy", "answer": "VIP会员享全店商品9.5折，您可在个人中心查看当前会员等级和可用福利，确认是否已自动享受折扣。"}
+{"qa_id": "QA0285", "query": "我是VIP会员想买打九折的商品有没有生日月双倍积分的那种", "gold_source_type": "faq", "gold_source_ids": ["FAQ015"], "tier": "multi_condition", "answer": "VIP会员享全店商品9.5折、生日月双倍积分等权益，您可在个人中心查看可用福利。"}
+{"qa_id": "QA0286", "query": "积分有效期是多久？", "gold_source_type": "faq", "gold_source_ids": ["FAQ016"], "tier": "plain", "answer": "积分有效期为12个月，过期作废，请在有效期内使用。"}
+{"qa_id": "QA0287", "query": "唉，那个积分到底咋用的啊？会过期不？", "gold_source_type": "faq", "gold_source_ids": ["FAQ016"], "tier": "colloquial", "answer": "每消费1元积1分，100积分抵1元，有效期12个月，过期作废。"}
+{"qa_id": "QA0288", "query": "消费累计的奖励点数有使用期限没，咋个换钱花呢？", "gold_source_type": "faq", "gold_source_ids": ["FAQ016"], "tier": "synonym", "answer": "每消费1元积1分，100分抵1元。积分有效期为12个月，过期作废，需在结算页勾选使用。"}
+{"qa_id": "QA0289", "query": "修个电饭煲这么麻烦，用了半年就不加热了，到底怎么修能不能说清楚", "gold_source_type": "faq", "gold_source_ids": ["FAQ017"], "tier": "noisy", "answer": "提供订单号和故障视频联系客服，审核通过后非人为损坏可免费维修，运费全免。"}
+{"qa_id": "QA0290", "query": "美的电饭煲用了半年突然不加热了一年内能免费修吗怎么申请", "gold_source_type": "faq", "gold_source_ids": ["FAQ017"], "tier": "multi_condition", "answer": "本店电器享1年免费保修。提供订单号和故障视频联系客服审核，通过后寄回维修，非人为损坏免收费用。"}
+{"qa_id": "QA0291", "query": "电饭煲用了半年不加热，还能免费保修吗？", "gold_source_type": "faq", "gold_source_ids": ["FAQ017"], "tier": "plain", "answer": "本店电器享1年免费保修，半年内可凭订单号和故障视频申请免费维修，非人为损坏免收费用。"}
+{"qa_id": "QA0292", "query": "诶我问一下哈，我在这买完东西那个发票咋整啊，能开不？咋申请啊？", "gold_source_type": "faq", "gold_source_ids": ["FAQ018"], "tier": "colloquial", "answer": "可以开具增值税普通发票（电子版）。下单时勾选“需要发票”，填写抬头及税号，收货后7个工作日内会发到邮箱。"}
+{"qa_id": "QA0293", "query": "购买商品后能否获得税务凭证？具体操作流程是怎样的？", "gold_source_type": "faq", "gold_source_ids": ["FAQ018"], "tier": "synonym", "answer": "可以开具电子版增值税普通发票。下单时勾选“需要发票”并填写抬头及税号，收货后7个工作日内发送至邮箱。"}
+{"qa_id": "QA0294", "query": "买个东西连发票都不给开吗？非要我等那么久才发，什么破规定", "gold_source_type": "faq", "gold_source_ids": ["FAQ018"], "tier": "noisy", "answer": "可以开增值税普通发票（电子版），下单时勾选“需要发票”并填写信息，确认收货后7个工作日内发邮箱。"}
+{"qa_id": "QA0295", "query": "想用花呗分期买个手机分12期怎么操作需要手续费吗", "gold_source_type": "faq", "gold_source_ids": ["FAQ019"], "tier": "multi_condition", "answer": "支持花呗分期，有3/6/12期可选，结算时选择分期方式，系统自动计算每期金额，按提示操作即可。"}
+{"qa_id": "QA0296", "query": "你们支持哪些分期付款方式？", "gold_source_type": "faq", "gold_source_ids": ["FAQ019"], "tier": "plain", "answer": "支持花呗、京东白条等主流分期支付，有3/6/12期可选，结算时按提示操作即可。"}
+{"qa_id": "QA0297", "query": "那个我在你们这买个东西能分期付吗？怎么弄啊，麻不麻烦呢", "gold_source_type": "faq", "gold_source_ids": ["FAQ019"], "tier": "colloquial", "answer": "支持花呗、京东白条分期，有3/6/12期可选，结算时选分期方式，按提示操作即可。"}
+{"qa_id": "QA0298", "query": "领取的折扣码该如何在付款时生效？", "gold_source_type": "faq", "gold_source_ids": ["FAQ020"], "tier": "synonym", "answer": "结算时选择可用优惠券抵扣，需满足满减门槛、包含指定商品且在有效期内，否则无法使用。"}
+{"qa_id": "QA0299", "query": "我都领了券了怎么付款的时候还是原价啊，是不是系统有问题", "gold_source_type": "faq", "gold_source_ids": ["FAQ020"], "tier": "noisy", "answer": "结算时需选择可用优惠券。检查是否满足满减门槛、包含指定商品且在有效期内，三者缺一不可。"}
+{"qa_id": "QA0300", "query": "领了满200减50的优惠券但结账时用不了是不是只能买指定商品", "gold_source_type": "faq", "gold_source_ids": ["FAQ020"], "tier": "multi_condition", "answer": "需检查是否满足满减门槛、包含指定商品且在有效期内，三者缺一不可。"}
+{"qa_id": "QA0301", "query": "这个商品支持7天无理由退货退款吗？", "gold_source_type": "faq", "gold_source_ids": ["FAQ021"], "tier": "plain", "answer": "支持。需商品未使用、不影响二次销售，可在订单详情页申请，退款原路返回，1-3个工作日到账。"}
+{"qa_id": "QA0302", "query": "哎，那个退货退款是怎么搞的呀，我不想要了能退不？", "gold_source_type": "faq", "gold_source_ids": ["FAQ021"], "tier": "colloquial", "answer": "商品未使用、不影响二次销售，7天内可在订单详情页申请，审核通过后退款原路返回，通常1-3个工作日到账。"}
+{"qa_id": "QA0303", "query": "购买后反悔了，可以取消订单把钱拿回来吗？", "gold_source_type": "faq", "gold_source_ids": ["FAQ021"], "tier": "synonym", "answer": "商品未使用且不影响二次销售，可申请7天无理由退货退款，审核通过后寄回商品，退款原路返回，1-3个工作日到账。"}
+{"qa_id": "QA0304", "query": "你们到底能不能换货啊，买回来尺码不合适急死了，非要吊牌完整吗？", "gold_source_type": "faq", "gold_source_ids": ["FAQ022"], "tier": "noisy", "answer": "签收后7天内可申请一次换货，需确保商品全新、吊牌完整。非质量问题运费自理。"}
+{"qa_id": "QA0305", "query": "签收后超过7天了但吊牌还在没有试穿能不能换货", "gold_source_type": "faq", "gold_source_ids": ["FAQ022"], "tier": "multi_condition", "answer": "不能，换货需在签收后7天内申请，且商品需全新、吊牌完整。"}
+{"qa_id": "QA0306", "query": "尺码不合适可以换货吗？换货需要什么条件？", "gold_source_type": "faq", "gold_source_ids": ["FAQ022"], "tier": "plain", "answer": "签收后7天内可申请一次换货，商品需全新、吊牌完整。非质量问题运费自理，审核通过后寄回，收到后3天内发出新品。"}
+{"qa_id": "QA0307", "query": "那个，我想问一下，我买的那个是现货对吧，那大概几天能到货啊？", "gold_source_type": "faq", "gold_source_ids": ["FAQ023"], "tier": "colloquial", "answer": "现货下单后48小时内发货，一般地区2-5天送达，偏远地区约5-7天。"}
+{"qa_id": "QA0308", "query": "我买的现货大概多久能发出？快递送到手上一般要等几天？", "gold_source_type": "faq", "gold_source_ids": ["FAQ023"], "tier": "synonym", "answer": "现货商品订单确认后48小时内发货，普通地区快递2-5天送达，偏远地区约需5-7天。"}
+{"qa_id": "QA0310", "query": "淘宝上买衣服如果是因为质量问题要退货但是我自己付了运费能不能退给我？", "gold_source_type": "faq", "gold_source_ids": ["FAQ024"], "tier": "multi_condition", "answer": "因质量问题或发错货退货，卖家承担运费；个人原因需自行承担。建议购买运费险，可获10-15元赔偿。"}
+{"qa_id": "QA0311", "query": "退货需要自己承担运费吗", "gold_source_type": "faq", "gold_source_ids": ["FAQ024"], "tier": "plain", "answer": "商品质量问题或发错货由商家承担运费；个人原因退货需您承担寄回运费。"}
+{"qa_id": "QA0312", "query": "那个运费的事，如果我不想要了退货，那个寄回去的钱是不是得我自己掏啊？", "gold_source_type": "faq", "gold_source_ids": ["FAQ024"], "tier": "colloquial", "answer": "个人原因退货需您承担寄回运费，建议购买运费险，可获赔10-15元。"}
+{"qa_id": "QA0313", "query": "加入你们有什么福利？注册后就有优惠价吗？怎么才能得到更低的折扣？", "gold_source_type": "faq", "gold_source_ids": ["FAQ025"], "tier": "synonym", "answer": "注册即享会员价，累计消费满500元升级银卡享9.5折，满2000元升金卡享9折免运费，生日月领满100减20券。"}
+{"qa_id": "QA0314", "query": "烦死了 到底要消费多少才能升金卡 能便宜多少啊 快说清楚", "gold_source_type": "faq", "gold_source_ids": ["FAQ025"], "tier": "noisy", "answer": "累计消费满2000元可升级金卡，享9折优惠和免运费。"}
+{"qa_id": "QA0315", "query": "想成为金卡会员需要累计消费多少元，是不是有9折和免运费？", "gold_source_type": "faq", "gold_source_ids": ["FAQ025"], "tier": "multi_condition", "answer": "累计消费满2000元升金卡，享9折免运费。"}
+{"qa_id": "QA0316", "query": "每消费多少元可以积1分？", "gold_source_type": "faq", "gold_source_ids": ["FAQ026"], "tier": "plain", "answer": "每消费1元可以积1分。"}
+{"qa_id": "QA0317", "query": "那个积分啊，是怎么算的，一块钱能积多少分啊，还有那个积分能干嘛用呢", "gold_source_type": "faq", "gold_source_ids": ["FAQ026"], "tier": "colloquial", "answer": "每消费1元积1分，积分可在结账时抵扣现金，100积分等于1元，部分秒杀商品不参与积分，有效期1年。"}
+{"qa_id": "QA0318", "query": "攒下的点数有什么途径消耗？", "gold_source_type": "faq", "gold_source_ids": ["FAQ026"], "tier": "synonym", "answer": "每消费1元积1分，100积分可抵扣1元，部分秒杀商品除外，积分有效期1年。"}
+{"qa_id": "QA0319", "query": "修个玩意儿磨磨唧唧的，两个月就坏了，到底能不能免费修给个准话！", "gold_source_type": "faq", "gold_source_ids": ["FAQ027"], "tier": "noisy", "answer": "可以免费维修。非人为损坏，联系在线客服提供订单号和故障视频，审核通过后寄回，我们承担运费。"}
+{"qa_id": "QA0320", "query": "用了两个月坏了的不是人为损坏的本店商品能免费保修吗", "gold_source_type": "faq", "gold_source_ids": ["FAQ027"], "tier": "multi_condition", "answer": "可以。享受1年免费保修，非人为损坏可联系客服提供订单号和故障视频，审核通过后寄回维修，运费由店家承担。"}
+{"qa_id": "QA0321", "query": "非人为损坏的故障多久能修好", "gold_source_type": "faq", "gold_source_ids": ["FAQ027"], "tier": "plain", "answer": "审核通过后寄回维修，维修周期约5-7个工作日。"}
+{"qa_id": "QA0322", "query": "那个发票怎么开啊，我买的时候忘了填信息了，还能补吗咋整？", "gold_source_type": "faq", "gold_source_ids": ["FAQ028"], "tier": "colloquial", "answer": "签收后30天内联系客服补开，电子发票会通过邮件发送，专票需提供完整资料。"}
+{"qa_id": "QA0323", "query": "你们能提供购物凭证吗？如何获取呢？", "gold_source_type": "faq", "gold_source_ids": ["FAQ028"], "tier": "synonym", "answer": "可以。下单时填写抬头和税号，若忘记，签收后30天内联系客服补开，电子发票通过邮件发送。"}
+{"qa_id": "QA0324", "query": "你们到底能不能开发票啊，我都问了好几次了，说详细点行不行。", "gold_source_type": "faq", "gold_source_ids": ["FAQ028"], "tier": "noisy", "answer": "本店支持电子发票，下单时填写抬头和税号，或签收后30天内联系客服补开，以邮件发送。"}
+{"qa_id": "QA0325", "query": "我在付款时能用花呗分期买跨境商品吗预算一千左右", "gold_source_type": "faq", "gold_source_ids": ["FAQ029"], "tier": "multi_condition", "answer": "跨境商品仅支持支付宝和微信支付，不支持花呗分期付款。"}
+{"qa_id": "QA0326", "query": "支付方式支持哪些付款方式", "gold_source_type": "faq", "gold_source_ids": ["FAQ029"], "tier": "plain", "answer": "支持支付宝、微信支付、银联在线、花呗分期。大额商品支持京东白条，跨境电商仅支持支付宝和微信支付。"}
+{"qa_id": "QA0327", "query": "诶那个，我想问一下，就是那个支付方式，能用花呗分期吗？有啥条件没？", "gold_source_type": "faq", "gold_source_ids": ["FAQ029"], "tier": "colloquial", "answer": "订单满100元可选花呗分期，支持3/6/12期。跨境电商商品仅支持支付宝和微信支付。"}
+{"qa_id": "QA0328", "query": "为什么我的折扣码没法生效？", "gold_source_type": "faq", "gold_source_ids": ["FAQ030"], "tier": "synonym", "answer": "请检查券是否在有效期，订单金额是否达门槛，以及商品是否被排除（如秒杀或特价品）。如仍有问题，请联系客服。"}
+{"qa_id": "QA0329", "query": "搞什么啊这张券明明没过期却用不了，我是真服了，到底怎么个事不能爽快点说吗", "gold_source_type": "faq", "gold_source_ids": ["FAQ030"], "tier": "noisy", "answer": "请确认优惠券是否在有效期内、订单金额是否满足满减门槛，以及商品是否被排除（如秒杀品），仍不行请联系客服。"}
+{"qa_id": "QA0330", "query": "有没有京东的店铺券满300减50能用在手机上的", "gold_source_type": "faq", "gold_source_ids": ["FAQ030"], "tier": "multi_condition", "answer": "请确认优惠券有效期内、订单金额是否满足满减门槛（300元），且手机是否被排除（如秒杀品、特价清仓）。"}

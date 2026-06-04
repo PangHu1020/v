@@ -126,23 +126,23 @@ class KnowledgeRetriever:
 
         client.create_collection(collection_name=collection_name, schema=schema)
 
-        # Index configuration
-        index_dense = {
-            "field_name": "embedding",
-            "metric_type": "COSINE",
-            "index_name": "dense_idx",
-            "index_type": "HNSW",
-            "params": {"M": 16, "efConstruction": 64},
-        }
-        client.create_index(collection_name, index_params=index_dense)
-
-        index_sparse = {
-            "field_name": "sparse_embedding",
-            "metric_type": "BM25",
-            "index_name": "sparse_idx",
-            "index_type": "SPARSE_INVERTED_INDEX",
-        }
-        client.create_index(collection_name, index_params=index_sparse)
+        # Index configuration. pymilvus 3.x requires an IndexParams object
+        # (built via prepare_index_params), not raw dicts.
+        index_params = client.prepare_index_params()
+        index_params.add_index(
+            field_name="embedding",
+            index_name="dense_idx",
+            index_type="HNSW",
+            metric_type="COSINE",
+            params={"M": 16, "efConstruction": 64},
+        )
+        index_params.add_index(
+            field_name="sparse_embedding",
+            index_name="sparse_idx",
+            index_type="SPARSE_INVERTED_INDEX",
+            metric_type="BM25",
+        )
+        client.create_index(collection_name, index_params=index_params)
         client.load_collection(collection_name)
 
     async def _rewrite_query(self, llm_caller: Any, query: str) -> QueryRewriteResult:
@@ -257,6 +257,7 @@ class KnowledgeRetriever:
         top_k: int = DEFAULT_TOP_K,
         source_type: str | None = None,
         settings: Any = None,
+        trace: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Run the cascade retrieval pipeline against Milvus database.
 
@@ -268,6 +269,10 @@ class KnowledgeRetriever:
             top_k: Maximum rows to return (clamped to [1, MAX_TOP_K]).
             source_type: Optional filter, e.g. ``"product"``.
             settings: Optional AppSettings override for testing.
+            trace: Optional dict; when provided it is populated in-place with
+                ``stage`` (1/2/3 = the cascade step that produced the returned
+                results) and ``max_score``. Used by the offline eval harness
+                for per-stage attribution; ignored in production.
 
         Returns:
             List of dicts with keys: source_type, source_id, text, metadata, similarity.
@@ -311,6 +316,9 @@ class KnowledgeRetriever:
                 count=len(results),
                 max_score=max_score,
             )
+            if trace is not None:
+                trace["stage"] = 1
+                trace["max_score"] = max_score
             return results
 
         # --- Stage 2: Hybrid (dense + BM25) retrieval on original query ---
@@ -335,6 +343,9 @@ class KnowledgeRetriever:
                 count=len(results),
                 max_score=max_score,
             )
+            if trace is not None:
+                trace["stage"] = 2
+                trace["max_score"] = max_score
             return results
 
         # --- Stage 3: LLM rewrite + Hybrid retrieval ---
@@ -369,6 +380,9 @@ class KnowledgeRetriever:
             count=len(results),
             max_score=max_score,
         )
+        if trace is not None:
+            trace["stage"] = 3
+            trace["max_score"] = max_score
         return results
 
     def format(self, rows: list[dict[str, Any]]) -> str:

@@ -46,14 +46,22 @@ def get_embedding(
     settings: LLMSettings,
     embedding: EmbeddingSettings,
 ) -> OpenAIEmbeddings:
-    """Construct an ``OpenAIEmbeddings`` against the Qwen endpoint.
+    """Construct an ``OpenAIEmbeddings`` against the Qwen (DashScope) endpoint.
 
-    Note: DashScope's text-embedding-v3 does not support the `dimensions`
-    parameter via the OpenAI-compatible endpoint; it always returns 1024-dim
-    vectors. The parameter is omitted to avoid 400 errors.
+    Two DashScope-specific quirks are handled here:
+
+    - ``check_embedding_ctx_length=False``: langchain-openai otherwise
+      tiktoken-encodes inputs into token-id lists before sending. DashScope's
+      OpenAI-compatible endpoint rejects token-id input with a 400
+      ("contents is neither str nor list of str"); it only accepts raw
+      strings. Disabling the check sends the text through verbatim.
+    - ``dimensions`` is omitted: ``text-embedding-v4`` returns 1024-dim
+      vectors by default, matching ``EMBEDDING_DIM`` and the Milvus
+      collection schema.
     """
     return OpenAIEmbeddings(
         model=embedding.model,
         base_url=settings.base_url_qwen or None,
         api_key=SecretStr(settings.api_key_qwen) if settings.api_key_qwen else None,
+        check_embedding_ctx_length=False,
     )

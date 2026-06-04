@@ -66,7 +66,7 @@ class EmbeddingSettings(BaseSettings):
 
     model_config = SettingsConfigDict(**_COMMON, env_prefix="EMBEDDING_")
 
-    model: str = "qwen-text-embedding-v4"
+    model: str = "text-embedding-v4"
     dim: int = 1024
 
 
