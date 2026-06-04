@@ -77,6 +77,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sends=sends,
         silence_seconds=settings.memory.working_ttl_seconds,
         cache_ttl_seconds=settings.memory.working_ttl_seconds,
+        settings=settings,
         embedder=embedder,
         skill_registry=skill_registry,
         skill_top_k=settings.skill.max_skills_per_turn,

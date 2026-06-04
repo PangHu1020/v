@@ -24,12 +24,11 @@ Strict directory boundaries:
     - `search` — thin tool wrapper over `rag/retriever.py`; generic semantic recall over `agent.knowledge_chunk` (products / FAQ / policies). Does NOT recency-rank.
     - `recall_memory` — on-demand semantic query against `agent.event_memory` (recency-weighted cosine) for THIS customer's prior conversations.
     - `subagent` — focused single-shot delegate with its own context window. Function intentionally NOT pinned.
-  - `/rag`: Retrieval layer. `retriever.py` owns the pgvector SQL (filtered + unfiltered branches), top_k clamping, and result formatting. Tools and future endpoints import from here — no logic duplication.
+  - `/rag`: Retrieval layer. `retriever.py` owns the Milvus cascade pipeline (dense → hybrid → LLM-rewrite), top_k clamping, and result formatting. Tools and future endpoints import from here — no logic duplication. See `backend/eval/README.md` for eval results and parameter tuning.
   - `/skills`: Skill management. Two formats supported: pure markdown SOP, and `SKILL.md` + executable scripts. Sources: internal repo + community registry. **Executable scripts run only from internal-repo or whitelisted community sources; un-whitelisted community skills degrade to markdown-only mode.**
   - `/models`: LLM and embedding factory. OpenAI-compatible adapters via `langchain-openai` `ChatOpenAI(base_url=...)`. Per-task routing read from `.env`. Same-family fallback only (e.g., `pro → flash`); cross-family fallback deferred. Trigger conditions: 30-second timeout (one shot), HTTP 5xx, HTTP 429.
-  - `/hooks`: Lifecycle interceptors and centralized exception handling. Specific responsibilities:
+  - `/hooks`: Lifecycle interceptors. Specific responsibilities:
     - `on_session_start`: inject full `user_profile` row.
-    - `on_context_threshold`: trigger `summarizer` async + schedule ARQ delayed `consolidate_session(session_id)` job at `TTL - Δ`.
     - `on_session_end`: final consolidation + extract long-term memory.
   - `/configs`: Pydantic settings models per module. All parameters initialized here.
   - `/cron`: ARQ task definitions. **MVP scenarios**: `logistics_delivery_notification`, `ad_hoc_ad_push`, `repurchase_reminder`. Also hosts `consolidate_session` delayed-job worker.

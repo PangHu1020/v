@@ -34,19 +34,19 @@ async def search(
         source_type: Optional filter, e.g. ``"product"``. Omit for full corpus.
     """
     cfg = config.get("configurable", {}) if config else {}
-    pool = cfg.get("pg_pool")
     embedder = cfg.get("embedder")
     llm_caller = cfg.get("llm_caller")
+    settings = cfg.get("settings")  # AppSettings, carries milvus + rag config
     if not embedder:
         return "（无法检索：缺少运行上下文）"
 
     rows = await _retriever.retrieve(
-        pool=pool,
         embedder=embedder,
         llm_caller=llm_caller,
         query=query,
         top_k=top_k,
         source_type=source_type,
+        settings=settings,  # None → retriever falls back to get_settings()
     )
     _log.info("tools.search.recalled", count=len(rows), source_type=source_type or "*")
     return _retriever.format(rows)
