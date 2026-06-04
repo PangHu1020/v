@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.eval.common import QaItem, get_embedder, get_llm_caller, load_qa
-from backend.eval.metrics import aggregate
+from backend.eval.retrieval.metrics import aggregate
 from backend.v.configs import get_settings
 from backend.v.rag.retriever import KnowledgeRetriever
 from backend.v.utils.logging import configure as configure_logging
@@ -45,7 +45,7 @@ _log = get_logger("eval.run_eval")
 KS = [1, 3, 5]
 DEFAULT_TOP_K = 5
 CONCURRENCY = 8
-REPORT_PATH = Path(__file__).parent / "data" / "eval_report.json"
+REPORT_PATH = Path(__file__).parent.parent / "data" / "eval_report.json"
 
 
 async def _eval_one(

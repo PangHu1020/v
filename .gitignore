@@ -3,6 +3,7 @@
 .vscode/
 .venv/
 __pycache__/
+gen/
 *.pyc
 *.pyo
 *.egg-info/

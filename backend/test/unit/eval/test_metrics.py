@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from backend.eval.metrics import (
+from backend.eval.retrieval.metrics import (
     aggregate,
     hit_at_k,
     mrr_at_k,
