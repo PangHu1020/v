@@ -105,6 +105,7 @@ class QaItem:
     gold_source_ids: list[str]
     tier: str
     answer: str = ""
+    difficulty: str = ""  # easy / medium / hard (set by score_difficulty)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -118,6 +119,7 @@ class QaItem:
             gold_source_ids=list(d["gold_source_ids"]),
             tier=d["tier"],
             answer=d.get("answer", ""),
+            difficulty=d.get("difficulty", ""),
         )
 
 

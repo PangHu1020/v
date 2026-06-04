@@ -77,6 +77,7 @@ async def _eval_one(
     return {
         "qa_id": item.qa_id,
         "tier": item.tier,
+        "difficulty": item.difficulty,
         "gold_source_type": item.gold_source_type,
         "gold": item.gold_source_ids,
         "retrieved": [r["source_id"] for r in results],
@@ -106,6 +107,7 @@ def _report(rows: list[dict[str, Any]], top_k: int) -> dict[str, Any]:
         "top_k": top_k,
         "overall": overall,
         "by_tier": _group("tier"),
+        "by_difficulty": _group("difficulty"),
         "by_source_type": _group("gold_source_type"),
         "by_stage": {
             "distribution": stage_dist,
@@ -128,6 +130,9 @@ def _print_summary(report: dict[str, Any]) -> None:
     print("\nBY TIER:")
     for tier, m in report["by_tier"].items():
         print(f"  {tier:<16}", _fmt(m))
+    print("\nBY DIFFICULTY:")
+    for diff, m in report.get("by_difficulty", {}).items():
+        print(f"  {diff:<16}", _fmt(m))
     print("\nBY SOURCE_TYPE:")
     for st, m in report["by_source_type"].items():
         print(f"  {st:<16}", _fmt(m))

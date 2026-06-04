@@ -208,10 +208,11 @@ class RAGSettings(BaseSettings):
 
     model_config = SettingsConfigDict(**_COMMON, env_prefix="RAG_")
 
-    min_score: float = Field(default=0.88, ge=0.0, le=1.0)
-    """Stage-1 (dense-only) exit threshold. Raised from 0.65 based on eval."""
-    stage2_min_score: float = Field(default=0.75, ge=0.0, le=1.0)
-    """Stage-2 (hybrid) exit threshold. Queries below proceed to LLM-rewrite."""
+    min_score: float = Field(default=0.76, ge=0.0, le=1.0)
+    """Stage-1 (dense cosine) exit threshold → ~60% of queries exit here."""
+    stage2_min_score: float = Field(default=0.41, ge=0.0, le=1.0)
+    """Stage-2 (hybrid WeightedRanker) exit threshold → ~30% exit here, ~10% fall to rewrite.
+    Note: hybrid scores use a different scale (~0.40–0.90) than dense cosine (~0.60–0.95)."""
     min_k: int = Field(default=3, ge=1)
     dense_weight: float = Field(default=0.5, ge=0.0, le=1.0)
     bm25_weight: float = Field(default=0.5, ge=0.0, le=1.0)

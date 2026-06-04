@@ -133,6 +133,7 @@ async def _run_strategy(
         return {
             "qa_id": item.qa_id,
             "tier": item.tier,
+            "difficulty": item.difficulty,
             "gold_source_type": item.gold_source_type,
             "gold": item.gold_source_ids,
             "retrieved": [r["source_id"] for r in results],
@@ -145,18 +146,20 @@ async def _run_strategy(
 
 def _summarize(rows: list[dict]) -> dict:
     overall = aggregate(rows, KS)
-    by_tier: dict[str, dict] = {}
-    buckets: dict[str, list] = defaultdict(list)
-    for r in rows:
-        buckets[r["tier"]].append(r)
-    for tier, group in sorted(buckets.items()):
-        by_tier[tier] = aggregate(group, KS)
+
+    def _group(key: str) -> dict[str, dict]:
+        buckets: dict[str, list] = defaultdict(list)
+        for r in rows:
+            buckets[str(r.get(key, ""))].append(r)
+        return {name: aggregate(group, KS) for name, group in sorted(buckets.items())}
+
     latencies = sorted(r["latency_ms"] for r in rows)
     n = len(latencies)
     return {
         "n": n,
         "overall": overall,
-        "by_tier": by_tier,
+        "by_tier": _group("tier"),
+        "by_difficulty": _group("difficulty"),
         "latency_ms": {
             "mean": sum(latencies) / n if n else 0,
             "p50": latencies[n // 2] if n else 0,
