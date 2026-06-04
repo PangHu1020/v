@@ -159,17 +159,19 @@ class KnowledgeRetriever:
         ]
 
         try:
-            res = await llm_caller.chat(
-                role="main_fallback", messages=prompt, structured=QueryRewriteResult
-            )
-            # result.parsed holds the validated BaseModel when structured output is used
-            parsed_result = getattr(res, "parsed", None)
-            if parsed_result and isinstance(parsed_result, QueryRewriteResult):
-                _log.info(
-                    "rag.retriever.rewritten",
-                    rewritten=parsed_result.model_dump(mode="json"),
-                )
-                return parsed_result
+            # Use plain text call to avoid with_structured_output raising on fenced output.
+            # deepseek-v3.1 (fallback) sometimes wraps JSON in ```json ... ``` fences.
+            import json as _json
+            import re as _re
+
+            res = await llm_caller.chat(role="main_fallback", messages=prompt)
+            raw = (res.message.content or "").strip()
+            raw = _re.sub(r"^```[a-zA-Z]*\n?", "", raw)
+            raw = _re.sub(r"\n?```$", "", raw.strip()).strip()
+            data = _json.loads(raw)
+            result = QueryRewriteResult.model_validate(data)
+            _log.info("rag.retriever.rewritten", rewritten=result.model_dump(mode="json"))
+            return result
         except Exception as exc:
             _log.error("rag.retriever.rewrite_failed", error=type(exc).__name__)
 
@@ -337,7 +339,7 @@ class KnowledgeRetriever:
         )
 
         max_score = max((r["similarity"] for r in results), default=0.0)
-        if len(results) >= rag_cfg.min_k and max_score >= rag_cfg.min_score:
+        if len(results) >= rag_cfg.min_k and max_score >= rag_cfg.stage2_min_score:
             _log.info(
                 "rag.retriever.cascade.stage2_success",
                 count=len(results),

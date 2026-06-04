@@ -198,11 +198,20 @@ class MilvusSettings(BaseSettings):
 
 
 class RAGSettings(BaseSettings):
-    """RAG cascade search parameters."""
+    """RAG cascade search parameters.
+
+    Thresholds derived from eval/ablation on 150-doc corpus (120 products + 30 FAQ):
+    - Dense top-1 scores cluster at 0.59-0.82 for noisy/synonym queries.
+    - stage1_min=0.88 lets ~80% of hard queries proceed to hybrid (stage-2).
+    - stage2_min=0.75 lets remaining hard queries reach LLM-rewrite (stage-3).
+    """
 
     model_config = SettingsConfigDict(**_COMMON, env_prefix="RAG_")
 
-    min_score: float = Field(default=0.65, ge=0.0, le=1.0)
+    min_score: float = Field(default=0.88, ge=0.0, le=1.0)
+    """Stage-1 (dense-only) exit threshold. Raised from 0.65 based on eval."""
+    stage2_min_score: float = Field(default=0.75, ge=0.0, le=1.0)
+    """Stage-2 (hybrid) exit threshold. Queries below proceed to LLM-rewrite."""
     min_k: int = Field(default=3, ge=1)
     dense_weight: float = Field(default=0.5, ge=0.0, le=1.0)
     bm25_weight: float = Field(default=0.5, ge=0.0, le=1.0)
