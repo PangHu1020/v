@@ -149,27 +149,59 @@ async def main() -> None:
     gen_s = time.perf_counter() - t0
     print(f"  generated {len(rows)} answers in {gen_s:.1f}s")
 
-    from ragas import aevaluate
-    from ragas.dataset_schema import EvaluationDataset, SingleTurnSample
-
-    dataset = EvaluationDataset(
-        samples=[
-            SingleTurnSample(
-                user_input=r["user_input"],
-                retrieved_contexts=r["retrieved_contexts"],
-                response=r["response"],
-                reference=r["reference"],
-            )
-            for r in rows
-        ]
+    metrics = build_ragas_metrics(
+        judge_base_url=settings.llm.base_url_deepseek,
+        judge_api_key=settings.llm.api_key_deepseek,
+        judge_model=settings.llm.main_fallback,  # always deepseek for judging
+        embed_base_url=settings.llm.base_url_qwen,
+        embed_api_key=settings.llm.api_key_qwen,
+        embed_model=settings.embedding.model,
     )
-    metrics = build_ragas_metrics(llm, embedder)
 
     print("running RAGAS …")
     t1 = time.perf_counter()
-    result = await aevaluate(dataset, metrics=metrics, raise_exceptions=False)
+
+    # collections metrics use ascore() with different kwargs per metric type
+    def _kwargs(m, r):
+        name = type(m).__name__
+        if name == "Faithfulness":
+            return {"user_input": r["user_input"], "response": r["response"],
+                    "retrieved_contexts": r["retrieved_contexts"]}
+        if name == "ContextRecall":
+            return {"user_input": r["user_input"],
+                    "retrieved_contexts": r["retrieved_contexts"], "reference": r["reference"]}
+        if name == "AnswerRelevancy":
+            return {"user_input": r["user_input"], "response": r["response"]}
+        # AnswerCorrectness
+        return {
+            "user_input": r["user_input"],
+            "response": r["response"],
+            "reference": r["reference"],
+        }
+
+    metric_names = [type(m).__name__ for m in metrics]
+    ragas_sem = asyncio.Semaphore(CONCURRENCY)
+
+    async def score_one(m, r):
+        async with ragas_sem:
+            return await m.ascore(**_kwargs(m, r))
+
+    all_results = await asyncio.gather(
+        *[score_one(m, r) for m in metrics for r in rows],
+        return_exceptions=True,
+    )
     ragas_s = time.perf_counter() - t1
-    scores = result.to_pandas().mean(numeric_only=True).to_dict()
+
+    # reshape: all_results = [m0r0, m0r1, ..., m1r0, ...]
+    n = len(rows)
+    scores: dict[str, float] = {}
+    for mi, name in enumerate(metric_names):
+        vals = [
+            v.value
+            for v in all_results[mi * n : (mi + 1) * n]
+            if not isinstance(v, Exception) and v is not None
+        ]
+        scores[name] = round(sum(vals) / len(vals), 4) if vals else 0.0
 
     report = {
         "gen_model": gen_model_name,
@@ -178,7 +210,7 @@ async def main() -> None:
         "n": len(rows),
         "generation_wall_s": round(gen_s, 1),
         "ragas_wall_s": round(ragas_s, 1),
-        "scores": {k: round(float(v), 4) for k, v in scores.items() if k != "qa_id"},
+        "scores": scores,
     }
 
     safe_name = re.sub(r"[^a-z0-9_-]", "_", gen_model_name.lower())
