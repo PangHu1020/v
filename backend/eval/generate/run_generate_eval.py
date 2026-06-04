@@ -84,6 +84,13 @@ async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--difficulty", choices=["easy", "medium", "hard", "all"], default="all")
+    parser.add_argument(
+        "--model",
+        default="main_fallback",
+        choices=["main_primary", "main_fallback"],
+        help="LLM role for generation (default: main_fallback). "
+             "Always record this to keep comparisons apples-to-apples.",
+    )
     args = parser.parse_args()
 
     configure_logging(level="WARNING", json=False)
@@ -99,8 +106,8 @@ async def main() -> None:
         raise SystemExit("no qa items — check filters")
 
     embedder = get_embedding(settings.llm, settings.embedding)
-    # Use fallback model for generation (cheaper)
-    llm = get_chat_model(settings.llm, "main_fallback")
+    llm = get_chat_model(settings.llm, args.model)
+    gen_model_name = getattr(settings.llm, args.model.replace("-", "_"), args.model)
 
     retriever = KnowledgeRetriever()
     sem = asyncio.Semaphore(CONCURRENCY)
@@ -142,6 +149,7 @@ async def main() -> None:
 
     report = {
         "n": len(rows),
+        "gen_model": gen_model_name,
         "difficulty_filter": args.difficulty,
         "generation_wall_s": round(gen_s, 1),
         "ragas_wall_s": round(ragas_s, 1),
