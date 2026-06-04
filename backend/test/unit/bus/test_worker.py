@@ -57,7 +57,7 @@ def _msg(text: str = "hello", user: str = "ext-1", channel: str = "wecom") -> Sy
 
 class TestSessionResolution:
     async def test_first_message_mints(self, redis_client: fakeredis.aioredis.FakeRedis) -> None:
-        sid, minted = await _resolve_session_id(
+        sid, minted, _ = await _resolve_session_id(
             redis_client,
             channel="wecom",
             channel_user_id="ext-fresh",
@@ -69,7 +69,7 @@ class TestSessionResolution:
     async def test_returning_within_window_reuses(
         self, redis_client: fakeredis.aioredis.FakeRedis
     ) -> None:
-        sid1, _ = await _resolve_session_id(
+        sid1, _, _ = await _resolve_session_id(
             redis_client,
             channel="wecom",
             channel_user_id="ext-cont",
@@ -78,7 +78,7 @@ class TestSessionResolution:
         # Pretend the worker recorded last_seen.
         await redis_client.set("last_seen:wecom:ext-cont", str(time.time()), ex=3600)
 
-        sid2, minted = await _resolve_session_id(
+        sid2, minted, _ = await _resolve_session_id(
             redis_client,
             channel="wecom",
             channel_user_id="ext-cont",
@@ -90,7 +90,7 @@ class TestSessionResolution:
     async def test_returning_after_window_mints_new(
         self, redis_client: fakeredis.aioredis.FakeRedis
     ) -> None:
-        sid1, _ = await _resolve_session_id(
+        sid1, _, _ = await _resolve_session_id(
             redis_client,
             channel="wecom",
             channel_user_id="ext-stale",
@@ -99,7 +99,7 @@ class TestSessionResolution:
         # Set last_seen far in the past.
         await redis_client.set("last_seen:wecom:ext-stale", str(time.time() - 4000), ex=3600)
 
-        sid2, minted = await _resolve_session_id(
+        sid2, minted, _ = await _resolve_session_id(
             redis_client,
             channel="wecom",
             channel_user_id="ext-stale",

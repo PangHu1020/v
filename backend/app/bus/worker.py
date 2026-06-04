@@ -31,8 +31,12 @@ async def _resolve_session_id(
     channel: str,
     channel_user_id: str,
     silence_seconds: int,
-) -> tuple[str, bool]:
-    """Return ``(session_id, was_minted)``."""
+) -> tuple[str, bool, str | None]:
+    """Return ``(session_id, was_minted, prev_session_id)``.
+
+    ``prev_session_id`` is the expired session id when a new one is minted;
+    ``None`` on first-ever message or when the session is still active.
+    """
     last_seen_key = f"last_seen:{channel}:{channel_user_id}"
     session_key = f"session:{channel}:{channel_user_id}"
 
@@ -45,11 +49,14 @@ async def _resolve_session_id(
         if (time.time() - last_seen) < silence_seconds:
             existing = await redis.get(session_key)
             if existing:
-                return existing.decode("utf-8"), False
+                return existing.decode("utf-8"), False, None
 
+    # Mint a new session; read previous id before overwriting.
+    prev_raw = await redis.get(session_key)
+    prev_session_id = prev_raw.decode("utf-8") if prev_raw else None
     session_id = str(uuid.uuid4())
     await redis.set(session_key, session_id, ex=silence_seconds * 2)
-    return session_id, True
+    return session_id, True, prev_session_id
 
 
 async def _persist_session_row(
@@ -95,6 +102,31 @@ def _last_ai_message(messages: list) -> str | None:
     return None
 
 
+async def _promote_prev_session(
+    session_id: str,
+    *,
+    pool: asyncpg.Pool,
+    redis: redis_async.Redis,
+    llm_caller: Any,
+    embedder: Any,
+) -> None:
+    """Fire-and-forget: promote expired session's working memory to long-term."""
+    try:
+        from backend.v.memory.memory_extractor import promote_to_long_term
+
+        result = await promote_to_long_term(
+            {"pool": pool, "redis": redis, "llm_caller": llm_caller, "embedder": embedder},
+            session_id=session_id,
+        )
+        _log.info("bus.worker.session_end_promoted", session_id=session_id, result=result)
+    except Exception as exc:
+        _log.error(
+            "bus.worker.session_end_promote_failed",
+            session_id=session_id,
+            error=type(exc).__name__,
+        )
+
+
 def make_bus_handler(
     *,
     graph: Any,
@@ -117,7 +149,7 @@ def make_bus_handler(
 
     async def handle(msg: SystemMessage) -> None:
         with bind_request(channel=msg.channel, channel_user_id=msg.channel_user_id):
-            session_id, minted = await _resolve_session_id(
+            session_id, minted, prev_session_id = await _resolve_session_id(
                 redis,
                 channel=msg.channel,
                 channel_user_id=msg.channel_user_id,
@@ -130,6 +162,18 @@ def make_bus_handler(
                     channel=msg.channel,
                     channel_user_id=msg.channel_user_id,
                 )
+                # Previous session just expired — promote its working memory to
+                # long-term storage (fire-and-forget; don't block the new turn).
+                if prev_session_id and llm_caller and embedder:
+                    asyncio.create_task(  # noqa: RUF006  fire-and-forget by design
+                        _promote_prev_session(
+                            prev_session_id,
+                            pool=pool,
+                            redis=redis,
+                            llm_caller=llm_caller,
+                            embedder=embedder,
+                        )
+                    )
             with bind_request(session_id=session_id):
                 turn_started = time.perf_counter()
 

@@ -59,7 +59,12 @@ class TestSourceTypeFilter:
         await search.ainvoke({"query": "退货", "source_type": "faq"}, config=config)
 
         mock_retriever.retrieve.assert_called_once_with(
-            embedder=embedder, llm_caller=None, query="退货", top_k=5, source_type="faq", settings=None
+            embedder=embedder,
+            llm_caller=None,
+            query="退货",
+            top_k=5,
+            source_type="faq",
+            settings=None,
         )
 
 
