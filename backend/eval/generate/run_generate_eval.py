@@ -88,8 +88,14 @@ async def main() -> None:
         "--model",
         default="main_fallback",
         choices=["main_primary", "main_fallback"],
-        help="LLM role for generation (default: main_fallback). "
-             "Always record this to keep comparisons apples-to-apples.",
+        help="LLM role slot for generation.",
+    )
+    parser.add_argument(
+        "--gen-model",
+        default=None,
+        metavar="MODEL_NAME",
+        help="Override model name (e.g. qwen3-14b). Same API URL/key from .env."
+        " Without this flag the name from --model slot is used.",
     )
     args = parser.parse_args()
 
@@ -106,8 +112,19 @@ async def main() -> None:
         raise SystemExit("no qa items — check filters")
 
     embedder = get_embedding(settings.llm, settings.embedding)
-    llm = get_chat_model(settings.llm, args.model)
-    gen_model_name = getattr(settings.llm, args.model.replace("-", "_"), args.model)
+
+    # Build the generation LLM, optionally overriding the model name.
+    llm_settings = settings.llm
+    if args.gen_model:
+        import copy
+
+        llm_settings = copy.copy(settings.llm)
+        llm_settings.main_primary = args.gen_model
+        llm_settings.main_fallback = args.gen_model
+    llm = get_chat_model(llm_settings, args.model)
+    gen_model_name = args.gen_model or getattr(
+        settings.llm, args.model.replace("-", "_"), args.model
+    )
 
     retriever = KnowledgeRetriever()
     sem = asyncio.Semaphore(CONCURRENCY)
