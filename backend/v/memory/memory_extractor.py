@@ -32,9 +32,15 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from backend.v.memory.event_memory import insert_event_memories
-from backend.v.memory.prompts import LONG_TERM_PROMOTION_SYSTEM_PROMPT
+from backend.v.memory.prompts import (
+    LONG_TERM_PROMOTION_SYSTEM_PROMPT,
+    MID_SESSION_EXTRACTION_SYSTEM_PROMPT,
+)
 from backend.v.memory.types import ExtractionResult, MemoryEntry, UserProfile
-from backend.v.memory.working import delete_working_memory, read_working_memory
+from backend.v.memory.working import (
+    delete_working_memory,
+    read_working_memory,
+)
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.utils.logging import bind_request, get_logger
 
@@ -237,3 +243,45 @@ async def promote_to_long_term(
             events_inserted=events_inserted,
         )
         return {"profile_updated": profile_updated, "events_inserted": events_inserted}
+
+
+async def extract_from_messages(
+    messages: list[Any],
+    *,
+    llm_caller: LLMCaller,
+) -> ExtractionResult:
+    """Extract working + event memories from raw message history (no LLM result store needed).
+
+    Used for short sessions that end before the token threshold fires,
+    so working memory was never populated. Token-cheap: the result is
+    ``working_memories + event_memories`` only; ``profile_updates`` is
+    deferred (caller merges if needed).
+    """
+    # Build a compact transcript: keep HumanMessage + AIMessage content only.
+    from langchain_core.messages import AIMessage
+    from langchain_core.messages import HumanMessage as HMsg
+
+    lines: list[str] = []
+    for m in messages:
+        if isinstance(m, HMsg):
+            lines.append(f"客户：{m.content}")
+        elif isinstance(m, AIMessage) and not getattr(m, "tool_calls", None):
+            lines.append(f"助理：{m.content}")
+
+    if not lines:
+        return ExtractionResult()
+
+    transcript = "\n".join(lines)
+    prompt = [
+        SystemMessage(content=MID_SESSION_EXTRACTION_SYSTEM_PROMPT),
+        HumanMessage(content=f"<conversation>\n{transcript}\n</conversation>"),
+    ]
+    try:
+        result = await llm_caller.chat("memory_extract", prompt, structured=ExtractionResult)
+        parsed = result.parsed
+        if isinstance(parsed, ExtractionResult):
+            return parsed
+    except Exception as exc:
+        _log.error("memory.extract_from_messages.failed", error=type(exc).__name__)
+
+    return ExtractionResult()

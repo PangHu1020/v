@@ -83,7 +83,30 @@ created_at 没把握就省略，会被默认值填上当前时间。
 </rules>"""
 
 
-# ── Renderers for cross-session event recall ──────────────────────────────────
+# ── Mid-session extraction (compression) ─────────────────────────────────────
+
+MID_SESSION_EXTRACTION_SYSTEM_PROMPT = """<role>
+你是一名会话记忆整理员。在对话中段（上下文压缩时）提炼本轮已截断对话的关键信息。
+</role>
+
+<task>
+读取 <conversation>（截断的历史对话），输出 ExtractionResult：
+- working_memories：本次会话内仍有用的短期记忆，下轮对话注入 system prompt。
+- event_memories：值得 30 天内跨会话召回的具体事实。
+- profile_updates：保持空 dict——会话未结束，不修改长期画像。
+</task>
+
+<output_format>
+仅输出 JSON，键名：profile_updates（空 dict）、working_memories、event_memories。
+每条 MemoryEntry：{content, kind, importance(0-1), keywords}。
+</output_format>
+
+<rules>
+- working_memories：客户本次表达的偏好、待处理诉求、临时背景信息。importance >= 0.4。
+- event_memories：具体可引用的事实（订单号、投诉内容、特殊需求）。importance >= 0.3。
+- 不要重复两个列表里的相同信息；偏好类放 working，事件类放 event。
+- 没有可提取信息时给空数组，禁止编造。
+</rules>"""
 
 
 def render_recent_events_for_prompt(events: list[dict[str, Any]]) -> str:
