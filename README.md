@@ -4,7 +4,7 @@
 
 **State-Driven Multi-Agent Customer Service over Enterprise IM**
 
-A LangGraph customer-service agent for WeCom 智能机器人 (WeChat Work bot), with cascade RAG retrieval, hierarchical memory, and an offline evaluation harness.
+A LangGraph customer-service agent for WeCom AiBot (WeChat Work bot), with cascade RAG retrieval, hierarchical memory, and an offline evaluation harness.
 
 ![Python](https://img.shields.io/badge/python-3.11+-blue)
 ![LangGraph](https://img.shields.io/badge/LangGraph-0.2-orange)
@@ -22,7 +22,7 @@ A LangGraph customer-service agent for WeCom 智能机器人 (WeChat Work bot), 
 
 ## What is v-agent-platform?
 
-v-agent-platform is a reactive customer-service agent that answers customer inquiries over WeCom 智能机器人 (WeChat Work intelligent bot) via a persistent WebSocket. Inbound messages are debounced, ordered through a sharded Redis Streams bus, then handled by a LangGraph agent that retrieves grounded answers from a Milvus knowledge base and remembers each customer across sessions.
+v-agent-platform is a reactive customer-service agent that answers customer inquiries over WeCom Aibot (WeChat Work intelligent bot) via a persistent WebSocket. Inbound messages are debounced, ordered through a sharded Redis Streams bus, then handled by a LangGraph agent that retrieves grounded answers from a Milvus knowledge base and remembers each customer across sessions.
 
 **Key highlights:**
 
@@ -63,7 +63,7 @@ Anyone building or studying **production-shaped Agentic systems over IM**: the s
 
 | Category | Details |
 |---|---|
-| **Channel** | WeCom 智能机器人 persistent WebSocket; exponential-backoff reconnect + 30s heartbeat |
+| **Channel** | WeCom AiBot persistent WebSocket; exponential-backoff reconnect + 30s heartbeat |
 | **Inbound bus** | Redis Streams, sharded by `(channel, channel_user_id)`; strict per-shard serial; DLQ on handler failure |
 | **Debounce** | 500ms idle window merges message bursts into one turn before the bus |
 | **Agent graph** | LangGraph: enter → compress → intent classify → agent → tool loop → reflect → exit |
@@ -95,7 +95,7 @@ Anyone building or studying **production-shaped Agentic systems over IM**: the s
 **Reactive flow:**
 
 ```
-Customer → WeCom 智能机器人 WS → wecom_aibot_worker (debounce + normalize → SystemMessage)
+Customer → WeCom AiBot WS → wecom_aibot_worker (debounce + normalize → SystemMessage)
   → Redis Streams (sharded, per-shard serial) → bus worker → LangGraph agent
   → tools (search / recall_memory / calculator / subagent)
   → reply via Redis pub/sub → WecomAibotClient → Customer
@@ -115,7 +115,7 @@ v-main/
 │   ├── app/                          # Shell & Gateway (pure I/O, routing, infra)
 │   │   ├── main.py                   # FastAPI entry: lifespan, bus consumer task, health routes
 │   │   ├── wecom_aibot_worker.py     # Standalone WS worker process (inbound frames + pub/sub outbound)
-│   │   ├── wecom_aibot/              # WeCom 智能机器人 adapter
+│   │   ├── wecom_aibot/              # WeCom AiBot adapter
 │   │   │   ├── client.py             # Persistent WS client (reconnect + heartbeat)
 │   │   │   ├── debounce.py           # 500ms merge window (Redis hash + asyncio timer)
 │   │   │   └── outbound.py           # Redis pub/sub → WS send bridge
@@ -207,7 +207,7 @@ Minimum required:
 | Postgres | `POSTGRES_DSN` |
 | Redis | `REDIS_URL` |
 | Milvus | `MILVUS_URI` (default `http://localhost:19530`) / `MILVUS_COLLECTION_NAME` |
-| WeCom 智能机器人 | `WECOM_AIBOT_WS_URL` / `WECOM_AIBOT_BOT_ID` / `WECOM_AIBOT_SECRET` |
+| WeCom AiBot | `WECOM_AIBOT_WS_URL` / `WECOM_AIBOT_BOT_ID` / `WECOM_AIBOT_SECRET` |
 | LangSmith (optional) | `LANGSMITH_TRACING` / `LANGSMITH_API_KEY` / `LANGSMITH_PROJECT` |
 
 Leaving `WECOM_AIBOT_WS_URL` empty disables the WS worker (it exits immediately on start).
@@ -222,7 +222,7 @@ Two processes:
 uv run fastapi dev backend/app/main.py      # listens on :8000
 ```
 
-**2. WeCom 智能机器人 WS worker** (holds the persistent WebSocket):
+**2. WeCom AiBot WS worker** (holds the persistent WebSocket):
 
 ```bash
 uv run python -m backend.app.wecom_aibot_worker
