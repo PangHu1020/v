@@ -1,4 +1,4 @@
-.PHONY: install lint fmt test cov dev cron db-up db-down db-migrate clean
+.PHONY: install lint fmt test cov dev wecom-worker db-up db-down db-migrate clean
 
 install:
 	uv sync
@@ -20,11 +20,11 @@ cov:
 dev:
 	uv run fastapi dev backend/app/main.py
 
-cron:
-	uv run arq backend.app.cron_worker.WorkerSettings
+wecom-worker:
+	uv run python -m backend.app.wecom_aibot_worker
 
 db-up:
-	docker compose -f docker/docker-compose.yml up -d postgres redis
+	docker compose -f docker/docker-compose.yml up -d postgres redis etcd minio milvus
 
 db-down:
 	docker compose -f docker/docker-compose.yml down

@@ -1,149 +1,383 @@
+<div align="center">
+
 # v-agent-platform
 
-LangGraph + FastAPI + Redis Streams + ARQ + PostgreSQL 上的企微 / 飞书外部客服 AI 平台。
+**State-Driven Multi-Agent Customer Service over Enterprise IM**
 
-主要工作流：
+A LangGraph customer-service agent for WeCom 智能机器人 (WeChat Work bot), with cascade RAG retrieval, hierarchical memory, and an offline evaluation harness.
 
-- **被动答疑**（reactive）：客户在企微 / 飞书发消息 → 网关验签 → 500ms 去抖归一化 → Redis Streams（按 `(channel, channel_user_id)` 分片，单分片串行）→ Worker → LangGraph Agent → 回写 channel。
-- **主动触达**（proactive）：ARQ 定时任务（物流到货 / 广告推送 / 复购提醒）→ LangGraph 生成 → 写入 working memory → 推 channel。
-- **人工接管**（handoff）：`transfer_to_human` 工具触发 LangGraph `interrupt()` → 状态从 Redis 迁移到 Postgres checkpointer（去 TTL）→ Slack 推快照 → 人工回复经 Slack 转回 channel；点击 resume 按钮 → `Command(resume=...)` → 状态迁回 Redis。
+![Python](https://img.shields.io/badge/python-3.11+-blue)
+![LangGraph](https://img.shields.io/badge/LangGraph-0.2-orange)
+![Milvus](https://img.shields.io/badge/Milvus-2.5-00bfa5)
+![Redis](https://img.shields.io/badge/Redis-Streams-d82c20)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-pgvector-336791)
+![Coverage](https://img.shields.io/badge/coverage-82%25-green)
 
-详细架构 / 数据流 / 调用链：[doc/architecture.md](doc/architecture.md) · [doc/data_flow.md](doc/data_flow.md) · [doc/call_chain.md](doc/call_chain.md) · [doc/gaps.md](doc/gaps.md)。
+[Quick Start](#-quick-start) | [Features](#️-features) | [Architecture](#️-architecture) | [Evaluation](#-evaluation)
 
-## 0. 前置条件
+</div>
 
-- Python ≥ 3.11
-- [uv](https://docs.astral.sh/uv/) — 包管理 / 运行时
-- Docker + Docker Compose（用于跑本地 Postgres + Redis）
-- `psql` CLI（用于跑 schema 迁移；macOS `brew install libpq` / Ubuntu `apt install postgresql-client`）
+> [!NOTE]
+> Single-tenant MVP. Multi-tenancy is deferred but not blocked.
 
-## 1. 安装依赖
+## What is v-agent-platform?
+
+v-agent-platform is a reactive customer-service agent that answers customer inquiries over WeCom 智能机器人 (WeChat Work intelligent bot) via a persistent WebSocket. Inbound messages are debounced, ordered through a sharded Redis Streams bus, then handled by a LangGraph agent that retrieves grounded answers from a Milvus knowledge base and remembers each customer across sessions.
+
+**Key highlights:**
+
+- LangGraph state machine: `enter → compress → intent → agent → [tools]* → reflect → exit`
+- Three-stage cascade RAG: dense → hybrid (BM25+dense) → LLM structural rewrite, with tuned thresholds
+- Hierarchical memory: Redis working memory (hot) → Postgres `event_memory` (30-day vector recall) → `user_profile` (permanent)
+- Token-efficient memory consolidation: extract mid-session at compression, promote at session end — no redundant LLM passes
+- Strict per-shard serial ordering by `(channel, channel_user_id)`
+- Built-in tools auto-described from docstrings: `calculator`, `search`, `recall_memory`, `subagent`
+- Three-tier offline eval harness: retrieval (recall/MRR/nDCG), generation (RAGAS), system (latency + token cost)
+
+## Who is this for?
+
+Anyone building or studying **production-shaped Agentic systems over IM**: the strict app/engine layering, the bus + worker concurrency model, the hierarchical-memory lifecycle, and the evaluation harness are all decoupled and readable. A good reference for LangGraph orchestration, cascade RAG design, and how to evaluate a RAG pipeline end to end.
+
+---
+
+## Contents
+
+- [🗞️ Features](#️-features)
+- [📽️ Architecture](#️-architecture)
+- [📁 Project Structure](#-project-structure)
+- [📖 Quick Start](#-quick-start)
+  - [Prerequisites](#prerequisites)
+  - [Install](#install)
+  - [Infrastructure](#infrastructure)
+  - [Schema](#schema)
+  - [Configuration](#configuration)
+  - [Run](#run)
+- [📊 Evaluation](#-evaluation)
+- [🗝️ Tech Stack](#️-tech-stack)
+- [⚠️ Security Notice](#️-security-notice)
+- [📝 License](#-license)
+
+---
+
+## 🗞️ Features
+
+| Category | Details |
+|---|---|
+| **Channel** | WeCom 智能机器人 persistent WebSocket; exponential-backoff reconnect + 30s heartbeat |
+| **Inbound bus** | Redis Streams, sharded by `(channel, channel_user_id)`; strict per-shard serial; DLQ on handler failure |
+| **Debounce** | 500ms idle window merges message bursts into one turn before the bus |
+| **Agent graph** | LangGraph: enter → compress → intent classify → agent → tool loop → reflect → exit |
+| **Cascade RAG** | Stage-1 dense cosine → Stage-2 hybrid (dense+BM25 WeightedRanker) → Stage-3 LLM structural rewrite + hybrid |
+| **Tools** | `calculator` (safe AST), `search` (Milvus knowledge recall), `recall_memory` (per-customer episodic), `subagent` (isolated single-shot delegate) |
+| **Memory** | Redis working memory (TTL) + Postgres `event_memory` (pgvector, 30-day) + `user_profile` (permanent JSONB) |
+| **Consolidation** | Mid-session extraction at token threshold; session-end promotion (working memory → profile + events), or extract-from-history for short sessions |
+| **Reflection** | Post-answer fact-check against tool results; bounded retry on hallucination |
+| **Observability** | structlog structured logging + optional LangSmith tracing (env-gated) |
+| **Evaluation** | retrieval (recall@k / MRR / nDCG by difficulty + stage), generation (RAGAS 4 metrics), system (latency p50/p95 + token cost) |
+
+---
+
+## 📽️ Architecture
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  /backend/app/  ── Shell & Gateway                            │
+│  WS frame normalization, debounce, Redis Streams bus,          │
+│  bus worker (glue), infra lifecycle (Postgres/Redis/Milvus)    │
+│  ────────────────────────────────────────────────────────     │
+│  /backend/v/    ── Agent Engine                               │
+│  LangGraph orchestration, LLM reasoning, RAG retrieval,        │
+│  hierarchical memory, tools, skills, model factory             │
+└──────────────────────────────────────────────────────────────┘
+            Unidirectional dependency:  app → v   (v never imports app)
+```
+
+**Reactive flow:**
+
+```
+Customer → WeCom 智能机器人 WS → wecom_aibot_worker (debounce + normalize → SystemMessage)
+  → Redis Streams (sharded, per-shard serial) → bus worker → LangGraph agent
+  → tools (search / recall_memory / calculator / subagent)
+  → reply via Redis pub/sub → WecomAibotClient → Customer
+```
+
+On 30-min silence a new session is minted, and the previous session's working memory is promoted to long-term storage inline (no external queue).
+
+Detailed docs: [doc/architecture.md](doc/architecture.md) · [doc/data_flow.md](doc/data_flow.md) · [doc/call_chain.md](doc/call_chain.md) · [doc/gaps.md](doc/gaps.md)
+
+---
+
+## 📁 Project Structure
+
+```
+v-main/
+├── backend/
+│   ├── app/                          # Shell & Gateway (pure I/O, routing, infra)
+│   │   ├── main.py                   # FastAPI entry: lifespan, bus consumer task, health routes
+│   │   ├── wecom_aibot_worker.py     # Standalone WS worker process (inbound frames + pub/sub outbound)
+│   │   ├── wecom_aibot/              # WeCom 智能机器人 adapter
+│   │   │   ├── client.py             # Persistent WS client (reconnect + heartbeat)
+│   │   │   ├── debounce.py           # 500ms merge window (Redis hash + asyncio timer)
+│   │   │   └── outbound.py           # Redis pub/sub → WS send bridge
+│   │   ├── bus/                      # Redis Streams reactive bus
+│   │   │   ├── shard.py              # mmh3 routing by (channel, channel_user_id)
+│   │   │   ├── producer.py / consumer.py
+│   │   │   └── worker.py             # make_bus_handler: glue graph + outbound + session-end consolidation
+│   │   ├── gateway/                  # RequestIdMiddleware + /livez /readyz /health
+│   │   └── store/                    # asyncpg pool + redis.asyncio factories
+│   │
+│   └── v/                            # Agent Engine (pure logic)
+│       ├── agents/                   # state, nodes, edges, graph, checkpoints (Redis hot / PG cold)
+│       │   ├── compression_node.py   # Mid-session memory extraction + history trim
+│       │   └── intent_reflect.py     # Intent classifier + reflection (hallucination check)
+│       ├── rag/retriever.py          # KnowledgeRetriever: Milvus 3-stage cascade
+│       ├── memory/                   # working (Redis) / event_memory (pgvector) / user_profile / extractor
+│       ├── tools/                    # calculator, search, recall_memory, subagent
+│       ├── models/                   # LLMCaller (timeout + same-family fallback) + factory
+│       ├── skills/                   # markdown SOP loader + keyword matcher
+│       ├── hooks/                    # on_session_start, tool_guard
+│       └── configs/base.py           # Pydantic settings (one class per env prefix)
+│
+│   ├── eval/                         # Offline evaluation harness
+│   │   ├── retrieval/                # run_eval.py (cascade) + run_ablation.py + metrics.py
+│   │   ├── generate/                 # run_generate_eval.py (RAGAS 4 metrics)
+│   │   ├── system/                   # run_system_eval.py (latency + token cost)
+│   │   ├── gen/                      # LLM data generators (catalog / QA / difficulty scorer)
+│   │   ├── seed_milvus.py            # Embed corpus → Milvus collection
+│   │   └── data/                     # products.jsonl / faq.jsonl / qa.jsonl / reports
+│   │
+│   └── test/                         # pytest unit + e2e suites (402 tests, 82% coverage)
+│
+├── docker/docker-compose.yml         # postgres(pgvector) + redis + etcd + minio + milvus 2.5 + app
+├── scripts/sql/                      # Raw SQL migrations (Alembic deferred)
+├── doc/                              # architecture / data_flow / call_chain / gaps
+├── CLAUDE.md                         # Repo-wide engineering rules (+ per-layer CLAUDE.md)
+└── README.md
+```
+
+---
+
+## 📖 Quick Start
+
+### Prerequisites
+
+- `Python ≥ 3.11`
+- [uv](https://docs.astral.sh/uv/) — package manager / runner
+- Docker + Docker Compose (local Postgres + Redis + Milvus)
+- `psql` CLI (for schema migration)
+- An OpenAI-compatible LLM + embedding endpoint (default: DashScope compatible-mode — DeepSeek chat + Qwen `text-embedding-v4`)
+
+### Install
 
 ```bash
 uv sync
 ```
 
-会创建 `.venv/` 并按 `uv.lock` 装齐依赖。后续所有命令都用 `uv run ...` 自动落到这个环境。
+Creates `.venv/` and installs from `uv.lock`. Run everything with `uv run ...`.
 
-## 2. 起 Postgres + Redis
-
-```bash
-docker compose -f docker/docker-compose.yml up -d postgres redis
-```
-
-只起这俩；`app` service 是 profiled 的（`profiles: ["app"]`），不会被 `up -d` 默认拉起。等到都 healthy 再继续：
+### Infrastructure
 
 ```bash
-docker compose -f docker/docker-compose.yml ps
+docker compose -f docker/docker-compose.yml up -d postgres redis etcd minio milvus
+docker compose -f docker/docker-compose.yml ps   # wait until healthy
 ```
 
-## 3. 灌 schema
+The `app` service is profiled (`profiles: ["app"]`) and is not started by default.
+
+### Schema
 
 ```bash
 bash scripts/db_apply.sh
 ```
 
-按数字顺序执行 [scripts/sql/](scripts/sql/) 下的 SQL：
-- `000_extensions.sql` — `pgvector` 扩展
-- `010_schema_agent.sql` — `agent` 库（working memory / checkpointer / user_profile / memory_episodes）
-- `020_schema_dw.sql` — `dw` 业务库
-- `030_schema_meta.sql` — `meta` NL2SQL 元数据库
-- `050_session_memory_ttl.sql` — session memory TTL 列
+Runs [scripts/sql/](scripts/sql/) in order: pgvector extension → `agent` schema (working memory / checkpointer / user_profile / event_memory / knowledge_chunk) → `dw` business warehouse → `meta` NL2SQL metadata. Reads `POSTGRES_DSN`, defaulting to `postgresql://postgres:postgres@localhost:5432/agent`.
 
-脚本读 `POSTGRES_DSN` 环境变量，缺省走 `postgresql://postgres:postgres@localhost:5432/agent`。
-
-## 4. 配 `.env`
+### Configuration
 
 ```bash
 cp .env.example .env
 ```
 
-按需填值。最少需要：
+Minimum required:
 
-| 分组 | 关键字段 |
-| --- | --- |
-| LLM | `LLM_*_API_KEY` / `LLM_*_BASE_URL` / `LLM_*_PRIMARY_MODEL` |
-| Embedding | `EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` / `EMBEDDING_MODEL` |
+| Group | Keys |
+|---|---|
+| LLM | `LLM_BASE_URL_DEEPSEEK` / `LLM_API_KEY_DEEPSEEK` / `LLM_MAIN_PRIMARY` / `LLM_MAIN_FALLBACK` |
+| Embedding | `LLM_BASE_URL_QWEN` / `LLM_API_KEY_QWEN` / `EMBEDDING_MODEL` (`text-embedding-v4`) |
 | Postgres | `POSTGRES_DSN` |
 | Redis | `REDIS_URL` |
-| WeCom HTTP webhook | `WECOM_CORP_ID` / `WECOM_AGENT_ID` / `WECOM_SECRET` / `WECOM_TOKEN` / `WECOM_AES_KEY` |
-| WeCom 智能机器人 WS | `WECOM_AIBOT_WS_URL` / `WECOM_AIBOT_BOT_ID` / `WECOM_AIBOT_SECRET` |
-| Feishu | `FEISHU_APP_ID` / `FEISHU_APP_SECRET` / `FEISHU_ENCRYPT_KEY` / `FEISHU_VERIFY_TOKEN` |
-| Slack 接管 | `SLACK_BOT_TOKEN` / `SLACK_SIGNING_SECRET` / `SLACK_HANDOFF_CHANNEL` |
+| Milvus | `MILVUS_URI` (default `http://localhost:19530`) / `MILVUS_COLLECTION_NAME` |
+| WeCom 智能机器人 | `WECOM_AIBOT_WS_URL` / `WECOM_AIBOT_BOT_ID` / `WECOM_AIBOT_SECRET` |
+| LangSmith (optional) | `LANGSMITH_TRACING` / `LANGSMITH_API_KEY` / `LANGSMITH_PROJECT` |
 
-只起被动答疑链 + WeCom HTTP，那 Feishu / Slack / WeCom 智能机器人 一组留空即可——对应 channel 不会被启用。
+Leaving `WECOM_AIBOT_WS_URL` empty disables the WS worker (it exits immediately on start).
 
-## 5. 启动三个进程
+### Run
 
-平台跑起来需要 **三个独立进程**，按依赖顺序：
+Two processes:
 
-### 5.1 FastAPI 主进程（HTTP 网关 + 反应式 bus worker）
-
-```bash
-uv run fastapi dev backend/app/main.py
-```
-
-监听 `8000`。承担：
-
-- WeCom / Feishu HTTP webhook 收件
-- Slack 接管回调
-- 内部 admin API
-- 进程内的 bus worker（消费 Redis Streams → 调 `/v/agents`）
-
-生产用 `fastapi run`（同名子命令，无 reload）。
-
-### 5.2 ARQ 主动触达 worker
+**1. FastAPI main process** (HTTP gateway + in-process bus worker):
 
 ```bash
-uv run arq backend.app.cron_worker.WorkerSettings
+uv run fastapi dev backend/app/main.py      # listens on :8000
 ```
 
-承担：
-
-- 定时任务（每天 09:30 跑复购提醒扫描）
-- 按需任务（`notify_logistics_delivered` / `push_ad` / `consolidate_session` / `extract_session_memory`）
-
-任何进程都可以 `redis_pool.enqueue_job("notify_logistics_delivered", ...)` 把任务塞进来。
-
-### 5.3 WeCom 智能机器人 WS worker（仅在用 `wecom_aibot` channel 时启）
+**2. WeCom 智能机器人 WS worker** (holds the persistent WebSocket):
 
 ```bash
 uv run python -m backend.app.wecom_aibot_worker
 ```
 
-独立进程是因为它持有一条**长连 WebSocket**：
+Inbound `aibot_msg_callback` frames → normalized to `SystemMessage` → bus → same downstream as any channel. Outbound replies are published to Redis pub/sub `wecom_aibot:outbound` and forwarded over the WS by this worker.
 
-- 入站：`aibot_msg_callback` 帧 → 归一化为 `SystemMessage` → 进 bus → 走和 webhook 完全相同的下游链。
-- 出站：订阅 Redis pub/sub `wecom_aibot:outbound`；任何进程（FastAPI / ARQ / Slack 接管）都可以经 `WecomAibotOutbound.send_text(...)` publish payload，由这个进程经 WS 发出。
-
-`WECOM_AIBOT_WS_URL` 留空时此进程会立即退出（disabled-channel guard）。
-
-## 6. 验证
-
-跑通的最小冒烟：
+Before first use, seed the knowledge base:
 
 ```bash
-# 单元测试 + 覆盖率（CI 也跑这个）
-uv run pytest --cov=backend --cov-fail-under=80
+uv run python -m backend.eval.seed_milvus
+```
 
-# 静态检查
+### Verify
+
+```bash
+uv run pytest --cov=backend --cov-fail-under=80   # 402 tests, ≥80% gate
 uv run ruff check . --fix && uv run ruff format .
 ```
 
-### 健康探针
+Health probes on the FastAPI process: `GET /livez` (always 200), `GET /readyz` (503 if Postgres/Redis down), `GET /health` (legacy).
 
-FastAPI 进程暴露三个探针端点：
+---
 
-| 端点 | 状态码 | 用途 |
-| --- | --- | --- |
-| `GET /livez` | 始终 `200` | k8s liveness — 进程能应答即活。依赖故障**不**翻牌，避免 crash-loop |
-| `GET /readyz` | 依赖全 ok 时 `200`，否则 `503` | k8s readiness — Postgres / Redis 任一挂掉就把实例从 LB 摘掉 |
-| `GET /health` | 始终 `200`（响应体里报 down） | 老接口，向后兼容；新探针请用上面两个 |
+## 📊 Evaluation
 
-## 7. 开发约定速查
+A three-tier offline harness over a 150-doc corpus (120 products + 30 FAQ) and 337 difficulty-balanced QA pairs. See [backend/eval/README.md](backend/eval/README.md) for full results and parameter tuning.
 
-- 严格分层：`/backend/app/` 只做 I/O / 路由 / 归一化；`/backend/v/` 只做 Agent 逻辑。`/v/` 不许 import `/app/`。
-- 不要绕过 bus 直发回信——回信由 channel 适配器**直发**，不入 bus（bus 只走反应式入站）。
-- 不要把 LLM 调用写进 `/app/`。所有 LLM 走 `/v/agents/` 或 `/v/models/`。
-- 提交格式：Angular Conventional Commits（`feat:` / `fix:` / `refactor:` / `test:` / `docs:` / `chore:`）。
-- 全量规则在三份 CLAUDE.md：[根](CLAUDE.md) / [/backend/app/](backend/app/CLAUDE.md) / [/backend/v/](backend/v/CLAUDE.md)。
+```bash
+# Retrieval — recall@k / MRR / nDCG, by difficulty + cascade stage
+uv run python -m backend.eval.retrieval.run_eval
+
+# Retrieval ablation — dense vs hybrid variants vs rewrite+hybrid
+uv run python -m backend.eval.retrieval.run_ablation --no-rewrite
+
+# Generation — RAGAS: Faithfulness / ContextRecall / AnswerRelevancy / AnswerCorrectness
+uv run python -m backend.eval.generate.run_generate_eval --gen-model qwen3-8b --no-think
+
+# System — E2E latency (p50/p95/p99) + token consumption + cost estimate
+uv run python -m backend.eval.system.run_system_eval
+```
+
+Headline retrieval result (337 queries, top_k=5): **hit@5 = 0.982**, cascade stage split ≈ 60% : 30% : 10% (dense : hybrid : rewrite).
+
+---
+
+## 🗝️ Tech Stack
+
+<details>
+<summary>1. Agent Orchestration (click me)</summary>
+
+LangGraph state machine in `backend/v/agents/graph.py`:
+
+```
+enter → compress → intent → agent → route_after_agent ─┬→ tools → agent → ...
+                                                       └→ reflect ─┬→ agent (retry)
+                                                                   └→ exit → END
+```
+
+- `enter`: stacks the per-turn system prompt — base persona, `<customer_profile>`, `<recent_events>`, session working memory, matched SOPs.
+- `compress`: when `messages` exceed the token threshold, an LLM extracts `working_memories` (→ Redis) + `event_memories` (→ Postgres), then trims history behind a `<compressed_history>` marker.
+- `intent`: flash-tier LLM classifies the turn (refund / logistics / complaint / general).
+- `agent`: main-tier LLM with bound tools; loops through `ToolNode` until no more tool calls.
+- `reflect`: fact-checks the reply against tool results; bounded retry on detected hallucination.
+
+`LLMCaller` (`backend/v/models/llm_caller.py`) is the single entry point for all LLM calls: 30s timeout, same-family fallback (primary → fallback), structured output via Pydantic, and `RunnableConfig` propagation for nested LangSmith traces.
+
+</details>
+
+<details>
+<summary>2. Cascade RAG (click me)</summary>
+
+`KnowledgeRetriever` (`backend/v/rag/retriever.py`) runs a three-stage cascade against a single Milvus collection (`knowledge_chunks`):
+
+```
+query
+  ▼ Stage-1: dense cosine search          score ≥ 0.76  → return (~60%)
+  ▼ Stage-2: hybrid WeightedRanker         score ≥ 0.41  → return (~30%)
+  ▼ Stage-3: LLM structural rewrite + hybrid             → return (~10%)
+```
+
+- Collection schema: `source_type`, `source_id`, `text` (BM25-analyzed), `embedding` (FLOAT_VECTOR 1024), `sparse_embedding` (auto from BM25 Function), `metadata` (JSON).
+- Indexes: HNSW (M=16, efConstruction=64, COSINE) + SPARSE_INVERTED_INDEX (BM25).
+- Stage-2/3 thresholds were tuned on the eval corpus; note hybrid WeightedRanker scores live on a different scale (~0.40–0.90) than dense cosine (~0.60–0.95).
+
+The `search` tool is a thin `@tool` wrapper over this retriever; the seeder reuses the exact same collection setup for schema parity.
+
+</details>
+
+<details>
+<summary>3. Hierarchical Memory (click me)</summary>
+
+Three temperature tiers, all sentence-shaped via `MemoryEntry`:
+
+- **Working memory** (Redis, TTL = session window): per-session list, injected into the prompt each turn.
+- **Event memory** (Postgres `agent.event_memory`, pgvector, 30-day TTL): cross-session episodic recall via the `recall_memory` tool (recency-weighted cosine).
+- **User profile** (Postgres `agent.user_profile`, JSONB, permanent): one row per `(channel, channel_user_id)`, fully injected at `on_session_start`.
+
+**Consolidation is token-efficient by design:**
+- *Mid-session* (token threshold) — `compression_node` extracts working + event memories from the dropped history. No profile write (session still active).
+- *Session-end* (next message after silence) — `_promote_prev_session` fires fire-and-forget: if working memory is non-empty it promotes directly (no extra LLM call); if empty (short session) it runs `extract_from_messages()` over the checkpoint history, then promotes.
+
+</details>
+
+<details>
+<summary>4. Bus & Concurrency (click me)</summary>
+
+- `RedisStreamShard`: `mmh3.hash(f"{channel}:{channel_user_id}") % shard_count` (default 64 shards) → strict per-shard serial; different shards run concurrently.
+- `Debouncer`: merges sub-500ms bursts from the same identity into one turn before the bus (Redis hash + asyncio timer).
+- `BusConsumer`: one asyncio task per shard, `XREADGROUP` with DLQ on handler failure.
+- Outbound replies do **not** re-enter the bus — they go straight back through the channel adapter (the bus is reactive-inbound only).
+- LangGraph checkpointer: Redis on the hot path (`RedisCheckpointer`, TTL), with a langgraph-official `AsyncPostgresSaver` available for cold storage.
+
+</details>
+
+<details>
+<summary>5. Models & Infra (click me)</summary>
+
+- **LLM / Embedding**: OpenAI-compatible via `langchain-openai` `ChatOpenAI(base_url=...)`. Default DashScope compatible-mode — DeepSeek chat models + Qwen `text-embedding-v4` (1024-dim). `check_embedding_ctx_length=False` so DashScope receives raw strings, not token ids.
+- **Postgres**: single instance, multiple schemas — `agent` (memory/sessions/checkpoints/pgvector), `dw` (business warehouse), `meta` (NL2SQL metadata). asyncpg only; psycopg2 forbidden.
+- **Milvus 2.5**: vector + BM25 hybrid; deployed via docker-compose with etcd + minio.
+- **Redis**: bus, working memory, checkpointer hot path, pub/sub outbound.
+- **Config**: `pydantic-settings`, one class per env prefix, composed by a cached `get_settings()`.
+
+</details>
+
+<details>
+<summary>6. Evaluation Harness (click me)</summary>
+
+`backend/eval/` is split into three sub-modules plus data generators:
+
+- `retrieval/` — `run_eval.py` (end-to-end cascade: recall/MRR/nDCG/hit by difficulty + stage attribution) and `run_ablation.py` (dense vs hybrid weight variants vs rewrite+hybrid, run independently).
+- `generate/` — `run_generate_eval.py` scores answers with RAGAS 0.4 (Faithfulness / ContextRecall / AnswerRelevancy / AnswerCorrectness). The judge LLM is fixed to DeepSeek for apples-to-apples comparison; `--gen-model` overrides only the generation model (e.g. `qwen3-8b --no-think`).
+- `system/` — `run_system_eval.py` runs the full graph per query, capturing latency p50/p95/p99 and token counts (via a LangChain callback), with a configurable price table for cost estimation.
+- `gen/` — LLM generators that build the catalog, QA pairs, and difficulty scores; `seed_milvus.py` embeds the corpus into Milvus with the production schema.
+
+</details>
+
+---
+
+## ⚠️ Security Notice
+
+This platform is an **MVP / learning project** intended for **trusted local or internal-network** use. It does not ship production-grade hardening:
+
+- **No gateway authentication.** Internal admin/health routes are open to anyone who can reach the process.
+- **Secrets in plaintext `.env`.** `LLM_API_KEY_*`, `POSTGRES_DSN`, WeCom bot secrets are read from `.env` via `pydantic-settings`. Never commit `.env`; rotate keys manually.
+- **Default credentials** in `.env.example` / `docker-compose.yml` (e.g. `postgres:postgres`) must be changed before any non-local deployment.
+- **Plain transport / open CORS** by default. Terminate TLS and restrict origins behind a reverse proxy if exposed beyond localhost.
+- **Milvus / Postgres / Redis** are exposed without network-level access control by default — use firewall rules or Docker network isolation.
+
+> [!CAUTION]
+> Do not expose this directly to the public internet without adding authentication, TLS, and access controls.
+
+---
+
+## 📝 License
+
+Open source under the [MIT License](./LICENSE).
