@@ -1,18 +1,44 @@
-"""Application-wide settings, loaded from ``.env`` via ``pydantic-settings``.
+"""Application-wide settings, loaded by reflection from a YAML config file
+and ``.env`` via ``pydantic-settings``.
 
-Each settings class binds to a flat env-var prefix so the ``.env`` file stays
-shallow and grep-friendly. The composite :class:`AppSettings` is built by
-``get_settings()`` and cached for the process lifetime.
+Two layers, by design:
+
+- **``config.yaml``** (path from ``APP_CONFIG_FILE``, default ``./config.yaml``):
+  non-secret tunables — model names, thresholds, TTLs, shard counts.
+  Edit this to change behaviour without touching code.
+- **``.env`` / environment variables**: secrets and deployment overrides —
+  API keys, DSNs, bot credentials.
+
+Precedence (highest wins): **env var > .env > config.yaml > code default**.
+So a YAML value overrides the hard-coded default, and an env var overrides
+the YAML value. Secrets therefore stay out of the committed YAML.
+
+The YAML file is *sectioned by reflection*: each sub-settings class maps to a
+top-level YAML key derived from its field name on :class:`AppSettings`
+(``LLMSettings`` → ``llm``, ``RAGSettings`` → ``rag`` …). No hand-written
+section table — the field names on ``AppSettings`` are the single source of
+truth, so adding a new settings class needs no extra wiring here.
 """
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
+from pathlib import Path
+from typing import Any
 
+import yaml
 from pydantic import BaseModel, Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 
 _ENV_FILE = ".env"
+_CONFIG_FILE_ENV = "APP_CONFIG_FILE"
+_DEFAULT_CONFIG_FILE = "config.yaml"
+
 _COMMON = SettingsConfigDict(
     env_file=_ENV_FILE,
     env_file_encoding="utf-8",
@@ -21,7 +47,91 @@ _COMMON = SettingsConfigDict(
 )
 
 
-class RuntimeSettings(BaseSettings):
+@lru_cache(maxsize=8)
+def _load_yaml(path_str: str) -> dict[str, Any]:
+    """Parse a YAML config file into a dict (cached). Missing file → ``{}``."""
+    path = Path(path_str)
+    if not path.is_file():
+        return {}
+    with path.open(encoding="utf-8") as fh:
+        data = yaml.safe_load(fh)
+    return data or {}
+
+
+def _config_path() -> str:
+    return os.environ.get(_CONFIG_FILE_ENV, _DEFAULT_CONFIG_FILE)
+
+
+# Reverse map: sub-settings class -> its YAML section name.
+# Populated lazily after AppSettings is defined (see _section_for).
+_SECTION_CACHE: dict[type, str | None] = {}
+
+
+def _section_for(cls: type) -> str | None:
+    """Return the YAML top-level key for a settings class, via AppSettings reflection.
+
+    ``AppSettings.model_fields`` maps a field name (the YAML section) to the
+    annotated sub-settings type. We invert it once and cache. ``None`` when the
+    class is not part of the composite (e.g. instantiated standalone in a test).
+    """
+    if cls in _SECTION_CACHE:
+        return _SECTION_CACHE[cls]
+    section: str | None = None
+    # AppSettings is defined at module load, below; guard for first-call ordering.
+    app_cls = globals().get("AppSettings")
+    if app_cls is not None:
+        for field_name, field in app_cls.model_fields.items():
+            if field.annotation is cls:
+                section = field_name
+                break
+    _SECTION_CACHE[cls] = section
+    return section
+
+
+class SectionedYamlSource(PydanticBaseSettingsSource):
+    """Feed one section of the YAML config file into a settings class.
+
+    The section is resolved by reflection from ``AppSettings`` field names.
+    Only keys present in the YAML are returned; everything else falls through
+    to lower-priority sources (defaults).
+    """
+
+    def get_field_value(self, field: Any, field_name: str) -> tuple[Any, str, bool]:
+        # Not used — we override __call__ to return the whole section at once.
+        return None, field_name, False
+
+    def __call__(self) -> dict[str, Any]:
+        section = _section_for(self.settings_cls)
+        if section is None:
+            return {}
+        data = _load_yaml(_config_path())
+        block = data.get(section)
+        return dict(block) if isinstance(block, dict) else {}
+
+
+class _YamlSettings(BaseSettings):
+    """Base for all sub-settings: layers the sectioned YAML source under env vars."""
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        # Order = priority (first wins): init > env > .env > YAML > file secrets.
+        return (
+            init_settings,
+            env_settings,
+            dotenv_settings,
+            SectionedYamlSource(settings_cls),
+            file_secret_settings,
+        )
+
+
+class RuntimeSettings(_YamlSettings):
     """Process-level runtime configuration."""
 
     model_config = SettingsConfigDict(**_COMMON, env_prefix="APP_")
@@ -30,7 +140,7 @@ class RuntimeSettings(BaseSettings):
     log_level: str = "INFO"
 
 
-class LLMSettings(BaseSettings):
+class LLMSettings(_YamlSettings):
     """Provider credentials and routing for chat completions."""
 
     model_config = SettingsConfigDict(**_COMMON, env_prefix="LLM_")
@@ -44,7 +154,7 @@ class LLMSettings(BaseSettings):
     timeout_seconds: int = 30
 
 
-class LangSmithSettings(BaseSettings):
+class LangSmithSettings(_YamlSettings):
     """LangSmith tracing configuration.
 
     When ``api_key`` is set and ``tracing`` is true, every LangChain /
@@ -61,7 +171,7 @@ class LangSmithSettings(BaseSettings):
     endpoint: str = "https://api.smith.langchain.com"
 
 
-class EmbeddingSettings(BaseSettings):
+class EmbeddingSettings(_YamlSettings):
     """Embedding model configuration. Uses Qwen credentials from ``LLMSettings``."""
 
     model_config = SettingsConfigDict(**_COMMON, env_prefix="EMBEDDING_")
@@ -70,7 +180,7 @@ class EmbeddingSettings(BaseSettings):
     dim: int = 1024
 
 
-class DBSettings(BaseSettings):
+class DBSettings(_YamlSettings):
     """Postgres connection. Single instance with schemas: agent / dw / meta."""
 
     model_config = SettingsConfigDict(**_COMMON, env_prefix="POSTGRES_")
@@ -78,7 +188,7 @@ class DBSettings(BaseSettings):
     dsn: str = "postgresql://postgres:postgres@localhost:5432/agent"
 
 
-class RedisSettings(BaseSettings):
+class RedisSettings(_YamlSettings):
     """Redis connection shared by bus, working memory, and checkpointer."""
 
     model_config = SettingsConfigDict(**_COMMON, env_prefix="REDIS_")
@@ -86,7 +196,7 @@ class RedisSettings(BaseSettings):
     url: str = "redis://localhost:6379/0"
 
 
-class MemorySettings(BaseSettings):
+class MemorySettings(_YamlSettings):
     """Memory layer parameters (Phase-3 三层温度梯度).
 
     The three layers and their levers:
@@ -100,7 +210,7 @@ class MemorySettings(BaseSettings):
       rows with ``expires_at = now() + event_ttl_days * day``; the most
       recent ``recent_events_to_inject`` rows are auto-injected at
       ``on_session_start``.
-    - **用户记忆**（长期，永不过期）—— Postgres ``agent.user_profile``;
+    - **用户记忆**（长期，���不过期）—— Postgres ``agent.user_profile``;
       injected in full at ``on_session_start``.
 
     ``compression_threshold_tokens`` triggers the mid-session
@@ -123,7 +233,7 @@ class MemorySettings(BaseSettings):
     Set to 1.0 to disable (always false). Scheduled for removal."""
 
 
-class BusSettings(BaseSettings):
+class BusSettings(_YamlSettings):
     """Redis Streams bus configuration."""
 
     model_config = SettingsConfigDict(**_COMMON, env_prefix="BUS_")
@@ -134,7 +244,7 @@ class BusSettings(BaseSettings):
     debounce_ms: int = Field(default=500, ge=0)
 
 
-class WecomSettings(BaseSettings):
+class WecomSettings(_YamlSettings):
     """WeCom (企业微信) customer-side webhook credentials."""
 
     model_config = SettingsConfigDict(**_COMMON, env_prefix="WECOM_")
@@ -146,7 +256,7 @@ class WecomSettings(BaseSettings):
     aes_key: str = ""
 
 
-class WecomAibotSettings(BaseSettings):
+class WecomAibotSettings(_YamlSettings):
     """WeCom 智能机器人 (WebSocket) adapter settings (Phase-3 Group G).
 
     Unlike the HTTP webhook ``WecomSettings``, the 智能机器人 adapter
@@ -169,7 +279,7 @@ class WecomAibotSettings(BaseSettings):
     outbound_pubsub_channel: str = "wecom_aibot:outbound"
 
 
-class SkillSettings(BaseSettings):
+class SkillSettings(_YamlSettings):
     """Skill loader settings (Phase-2 P4).
 
     Skills are markdown SOPs the agent can prepend to its system prompt
@@ -187,7 +297,7 @@ class SkillSettings(BaseSettings):
     """Top-K skills to inject per matched turn. 0 disables injection."""
 
 
-class MilvusSettings(BaseSettings):
+class MilvusSettings(_YamlSettings):
     """Milvus vector database configuration."""
 
     model_config = SettingsConfigDict(**_COMMON, env_prefix="MILVUS_")
@@ -197,29 +307,32 @@ class MilvusSettings(BaseSettings):
     collection_name: str = "knowledge_chunks"
 
 
-class RAGSettings(BaseSettings):
+class RAGSettings(_YamlSettings):
     """RAG cascade search parameters.
 
-    Thresholds derived from eval/ablation on 150-doc corpus (120 products + 30 FAQ):
-    - Dense top-1 scores cluster at 0.59-0.82 for noisy/synonym queries.
-    - stage1_min=0.88 lets ~80% of hard queries proceed to hybrid (stage-2).
-    - stage2_min=0.75 lets remaining hard queries reach LLM-rewrite (stage-3).
+    Thresholds derived from eval/ablation on a 150-doc corpus:
+    - Stage-1 dense cosine exit at ``min_score`` (~60% of queries).
+    - Stage-2 hybrid WeightedRanker exit at ``stage2_min_score`` (~30%).
+    - Remaining ~10% reach the Stage-3 LLM rewrite.
+    Note hybrid scores live on a different scale (~0.40–0.90) than dense
+    cosine (~0.60–0.95); tune the two thresholds independently in config.yaml.
     """
 
     model_config = SettingsConfigDict(**_COMMON, env_prefix="RAG_")
 
     min_score: float = Field(default=0.76, ge=0.0, le=1.0)
-    """Stage-1 (dense cosine) exit threshold → ~60% of queries exit here."""
     stage2_min_score: float = Field(default=0.41, ge=0.0, le=1.0)
-    """Stage-2 (hybrid WeightedRanker) exit threshold → ~30% exit here, ~10% fall to rewrite.
-    Note: hybrid scores use a different scale (~0.40–0.90) than dense cosine (~0.60–0.95)."""
     min_k: int = Field(default=3, ge=1)
     dense_weight: float = Field(default=0.5, ge=0.0, le=1.0)
     bm25_weight: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
 class AppSettings(BaseModel):
-    """Composite settings handed to the FastAPI lifespan and to ``/v/`` modules."""
+    """Composite settings handed to the FastAPI lifespan and to ``/v/`` modules.
+
+    Field names here ARE the YAML section names (resolved by reflection in
+    :func:`_section_for`). Keep them in sync with ``config.example.yaml``.
+    """
 
     runtime: RuntimeSettings
     llm: LLMSettings
@@ -240,9 +353,10 @@ class AppSettings(BaseModel):
 def get_settings() -> AppSettings:
     """Return the cached composite settings instance.
 
-    Settings are loaded once per process. Tests override individual subsections
-    by clearing the cache and re-instantiating, or by monkeypatching env vars
-    before the first call.
+    Each sub-settings is built independently, layering env > .env > YAML >
+    default. Settings are read once per process; tests clear this cache (see
+    ``backend/test/conftest.py``) and point ``APP_CONFIG_FILE`` away so they
+    run against pure code defaults.
     """
     return AppSettings(
         runtime=RuntimeSettings(),

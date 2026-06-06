@@ -1,0 +1,65 @@
+# v-agent-platform — runtime configuration
+#
+# Copy to config.yaml and edit. Everything here is a NON-SECRET tunable:
+# model names, thresholds, TTLs, shard counts. Editing this file changes
+# behaviour without touching code.
+#
+# Secrets (API keys, DSNs, bot credentials) belong in .env, NOT here.
+#
+# Precedence (highest wins):  env var  >  .env  >  config.yaml  >  code default
+# Section names below map 1:1 to AppSettings fields (resolved by reflection).
+# Point a different file via the APP_CONFIG_FILE env var.
+
+runtime:
+  env: dev                 # dev | prod — controls JSON logging
+  log_level: INFO          # DEBUG | INFO | WARNING | ERROR
+
+llm:
+  # base_url_* / api_key_* are secrets → set in .env
+  main_primary: deepseek-v4-flash      # main reasoning model
+  main_fallback: deepseek-v3.1         # same-family fallback on timeout/5xx/429
+  timeout_seconds: 30                  # per-call timeout before fallback
+
+embedding:
+  model: text-embedding-v4             # DashScope Qwen embedding
+  dim: 1024                            # must match Milvus collection dim
+
+memory:
+  working_ttl_seconds: 1800            # Redis working-memory TTL (= session window)
+  event_ttl_days: 30                   # event_memory recall window
+  recent_events_to_inject: 3           # event rows injected at session start
+  compression_threshold_tokens: 4000   # mid-session compression trigger
+  compression_keep_recent_messages: 4  # trailing turns kept verbatim on compression
+
+bus:
+  stream_prefix: bus
+  shard_count: 64                      # 1..4096; per-shard serial ordering
+  consumer_group: workers
+  debounce_ms: 500                     # message-burst merge window
+
+rag:
+  min_score: 0.76                      # stage-1 dense cosine exit threshold
+  stage2_min_score: 0.41               # stage-2 hybrid exit threshold (different scale!)
+  min_k: 3                             # min results before a stage may exit
+  dense_weight: 0.5                    # hybrid dense branch weight
+  bm25_weight: 0.5                     # hybrid BM25 branch weight
+
+milvus:
+  uri: http://localhost:19530
+  collection_name: knowledge_chunks
+  # token is a secret → .env
+
+skill:
+  internal_repo_path: ""               # dir of markdown SOPs; empty disables
+  max_skills_per_turn: 3               # top-K SOPs injected per turn
+
+wecom_aibot:
+  heartbeat_seconds: 30
+  outbound_pubsub_channel: wecom_aibot:outbound
+  # ws_url / bot_id / secret are secrets → .env
+
+langsmith:
+  tracing: false
+  project: v-main
+  endpoint: https://api.smith.langchain.com
+  # api_key is a secret → .env

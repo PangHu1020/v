@@ -194,21 +194,34 @@ Runs [scripts/sql/](scripts/sql/) in order: pgvector extension → `agent` schem
 
 ### Configuration
 
+Two layers, by design:
+
+| File | Holds | Precedence |
+|---|---|---|
+| `config.yaml` | **non-secret tunables** — model names, thresholds, TTLs, shard counts, RAG weights | lowest (above code defaults) |
+| `.env` | **secrets + deployment infra** — API keys, DSNs, bot credentials | overrides YAML |
+
+Final precedence (highest wins): **env var > `.env` > `config.yaml` > code default**. Edit `config.yaml` to change behaviour without touching code; keep secrets out of it.
+
 ```bash
-cp .env.example .env
+cp config.example.yaml config.yaml    # tunables — edit freely
+cp .env.example .env                  # secrets — fill in API keys / credentials
 ```
 
-Minimum required:
+The YAML is *sectioned by reflection*: each top-level key maps to an `AppSettings` field (`llm`, `rag`, `memory`, `bus`, …) — no hand-written wiring, so a new settings class needs no extra config plumbing. Point at a different file with `APP_CONFIG_FILE=/path/to/config.yaml`.
+
+`.env` (secrets) minimum required:
 
 | Group | Keys |
 |---|---|
-| LLM | `LLM_BASE_URL_DEEPSEEK` / `LLM_API_KEY_DEEPSEEK` / `LLM_MAIN_PRIMARY` / `LLM_MAIN_FALLBACK` |
-| Embedding | `LLM_BASE_URL_QWEN` / `LLM_API_KEY_QWEN` / `EMBEDDING_MODEL` (`text-embedding-v4`) |
+| LLM | `LLM_BASE_URL_DEEPSEEK` / `LLM_API_KEY_DEEPSEEK` / `LLM_BASE_URL_QWEN` / `LLM_API_KEY_QWEN` |
 | Postgres | `POSTGRES_DSN` |
 | Redis | `REDIS_URL` |
-| Milvus | `MILVUS_URI` (default `http://localhost:19530`) / `MILVUS_COLLECTION_NAME` |
+| Milvus | `MILVUS_TOKEN` (cloud only) |
 | WeCom AiBot | `WECOM_AIBOT_WS_URL` / `WECOM_AIBOT_BOT_ID` / `WECOM_AIBOT_SECRET` |
-| LangSmith (optional) | `LANGSMITH_TRACING` / `LANGSMITH_API_KEY` / `LANGSMITH_PROJECT` |
+| LangSmith (optional) | `LANGSMITH_TRACING` / `LANGSMITH_API_KEY` |
+
+`config.yaml` tunables (see `config.example.yaml`): `llm.main_primary/fallback`, `embedding.model`, `memory.*` TTLs + compression thresholds, `bus.shard_count/debounce_ms`, `rag.min_score/stage2_min_score/weights`, `milvus.uri/collection_name`.
 
 Leaving `WECOM_AIBOT_WS_URL` empty disables the WS worker (it exits immediately on start).
 
