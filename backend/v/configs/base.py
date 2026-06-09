@@ -323,12 +323,16 @@ class RAGSettings(_YamlSettings):
 
     model_config = SettingsConfigDict(**_COMMON, env_prefix="RAG_")
 
-    # Stage-1 (dense cosine) exit gate.
-    stage1_floor: float = Field(default=0.60, ge=0.0, le=1.0)
-    stage1_rel_margin: float = Field(default=0.05, ge=0.0, le=1.0)
-    # Stage-2 (hybrid WeightedRanker) exit gate.
+    # Stage-1 (dense cosine) exit gate. Defaults are calibrated on the 337-QA
+    # eval set (Youden's J); re-run backend.eval.retrieval.calibrate after a
+    # model/corpus change.
+    stage1_floor: float = Field(default=0.70, ge=0.0, le=1.0)
+    stage1_rel_margin: float = Field(default=0.0, ge=0.0, le=1.0)
+    # Stage-2 (hybrid WeightedRanker) exit gate. No absolute floor — the
+    # fused-rank score is unnormalized, so only the scale-invariant relative
+    # margin is meaningful here.
     stage2_floor: float = Field(default=0.0, ge=0.0, le=1.0)
-    stage2_rel_margin: float = Field(default=0.05, ge=0.0, le=1.0)
+    stage2_rel_margin: float = Field(default=0.04, ge=0.0, le=1.0)
 
     min_k: int = Field(default=3, ge=1)
     dense_weight: float = Field(default=0.5, ge=0.0, le=1.0)

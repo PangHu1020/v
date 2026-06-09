@@ -166,7 +166,7 @@ class TestYamlConfig:
         _load_yaml.cache_clear()
         monkeypatch.setenv("APP_CONFIG_FILE", str(tmp_path / "does-not-exist.yaml"))
         monkeypatch.delenv("RAG_STAGE1_FLOOR", raising=False)
-        assert RAGSettings(_env_file=None).stage1_floor == 0.60  # code default
+        assert RAGSettings(_env_file=None).stage1_floor == 0.70  # code default
 
     def test_yaml_respects_validation(self, tmp_path, monkeypatch) -> None:
         # shard_count has ge=1, le=4096 — an out-of-range YAML value must raise
