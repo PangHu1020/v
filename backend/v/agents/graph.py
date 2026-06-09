@@ -113,9 +113,16 @@ def _make_guarded_tools_node(bound_tools: list[Any]):
     return _guarded
 
 
-def build_graph(checkpointer: BaseCheckpointSaver):
-    """Compile the agent graph with intent routing + conditional reflection."""
-    bound_tools = list(AGENT_TOOLS)
+def build_graph(checkpointer: BaseCheckpointSaver, *, extra_tools: list[Any] | None = None):
+    """Compile the agent graph with intent routing + conditional reflection.
+
+    Args:
+        checkpointer: LangGraph checkpointer (Redis hot path in production).
+        extra_tools: Dynamically-discovered tools to bind on top of the
+            built-in ``AGENT_TOOLS`` — e.g. MCP server tools resolved at
+            startup. Bound to both the LLM and the guarded ToolNode.
+    """
+    bound_tools = list(AGENT_TOOLS) + list(extra_tools or [])
 
     async def _agent(state: CustomerServiceState, config: RunnableConfig) -> dict[str, Any]:
         return await agent_node(state, config, tools=bound_tools)

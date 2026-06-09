@@ -60,6 +60,21 @@ skill:
   internal_repo_path: ""               # dir of markdown SOPs; empty disables
   max_skills_per_turn: 3               # top-K SOPs injected per turn
 
+mcp:
+  # JSON array of MCP server configs. Empty "[]" disables MCP (no extra tools).
+  # Each entry: {id, transport(stdio|http|sse), url|command, auth_type, ...}.
+  # For OAuth: auth_type=oauth + oauth_token_url/client_id/client_secret/scope.
+  # Secrets (api_key, oauth_client_secret) are better injected via MCP_SERVERS_JSON
+  # env var than committed here. Example for the local mock server:
+  #   [{"id":"shop","transport":"http","url":"http://localhost:9100/mcp",
+  #     "auth_type":"oauth","oauth_token_url":"http://localhost:9100/token",
+  #     "oauth_client_id":"agent","oauth_client_secret":"secret",
+  #     "write_tools":["create_handoff_ticket"]}]
+  servers_json: "[]"
+  cache_l1_ttl_seconds: 300            # in-memory tool-result cache TTL
+  cache_l2_ttl_seconds: 86400          # Redis tool-result cache TTL
+  call_timeout_seconds: 30             # per tool-call timeout
+
 wecom_aibot:
   heartbeat_seconds: 30
   outbound_pubsub_channel: wecom_aibot:outbound

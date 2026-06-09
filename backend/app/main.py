@@ -20,6 +20,7 @@ from backend.app.store import close_client, close_pool, create_client, create_po
 from backend.v.agents.checkpoints.redis import RedisCheckpointer
 from backend.v.agents.graph import build_graph
 from backend.v.configs import get_settings
+from backend.v.mcp import MCPRegistry, MCPToolCache, parse_servers
 from backend.v.models.factory import get_embedding
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.skills import SkillRegistry, load_skills
@@ -59,7 +60,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if settings.skill.internal_repo_path:
         _log.info("app.skills.loaded", count=len(skill_registry))
 
-    graph = build_graph(redis_ckpt)
+    # MCP: connect configured servers, discover their tools, bind on top of
+    # the built-in AGENT_TOOLS. Empty servers_json → no registry, no extra tools.
+    mcp_registry = None
+    mcp_tools: list[Any] = []
+    mcp_configs = parse_servers(settings.mcp.servers_json)
+    if mcp_configs:
+        mcp_cache = MCPToolCache(
+            redis,
+            l1_ttl_seconds=settings.mcp.cache_l1_ttl_seconds,
+            l2_ttl_seconds=settings.mcp.cache_l2_ttl_seconds,
+        )
+        mcp_registry = MCPRegistry(
+            mcp_configs,
+            mcp_cache,
+            call_timeout_seconds=settings.mcp.call_timeout_seconds,
+        )
+        await mcp_registry.connect_all()
+        mcp_tools = mcp_registry.tools
+        _log.info("app.mcp.ready", servers=len(mcp_configs), tools=len(mcp_tools))
+
+    graph = build_graph(redis_ckpt, extra_tools=mcp_tools)
 
     from backend.app.channels.wecom_aibot.outbound import WecomAibotOutbound
 
@@ -103,6 +124,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.bus_consumer_task = consumer_task
     app.state.graph = graph
     app.state.llm_caller = llm_caller
+    app.state.mcp_registry = mcp_registry
 
     try:
         yield
@@ -114,6 +136,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await consumer_task
         except asyncio.CancelledError:
             pass
+        if mcp_registry is not None:
+            await mcp_registry.aclose()
         await close_client(redis)
         await close_pool(pg_pool)
 

@@ -339,6 +339,25 @@ class RAGSettings(_YamlSettings):
     bm25_weight: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
+class MCPSettings(_YamlSettings):
+    """Model Context Protocol client configuration.
+
+    ``servers_json`` is a JSON-encoded list of server configs; each entry
+    matches :class:`backend.v.mcp.config.MCPServerConfig`. Empty list (the
+    default) disables MCP entirely — no registry, no extra tools.
+
+    Cache TTLs apply to non-write tool results; write-class tools
+    (declared per-server in ``write_tools``) skip the cache.
+    """
+
+    model_config = SettingsConfigDict(**_COMMON, env_prefix="MCP_")
+
+    servers_json: str = "[]"
+    cache_l1_ttl_seconds: int = Field(default=300, ge=0)
+    cache_l2_ttl_seconds: int = Field(default=86400, ge=0)
+    call_timeout_seconds: int = Field(default=30, ge=1)
+
+
 class AppSettings(BaseModel):
     """Composite settings handed to the FastAPI lifespan and to ``/v/`` modules.
 
@@ -359,6 +378,7 @@ class AppSettings(BaseModel):
     langsmith: LangSmithSettings
     milvus: MilvusSettings
     rag: RAGSettings
+    mcp: MCPSettings
 
 
 @lru_cache(maxsize=1)
@@ -384,4 +404,5 @@ def get_settings() -> AppSettings:
         langsmith=LangSmithSettings(),
         milvus=MilvusSettings(),
         rag=RAGSettings(),
+        mcp=MCPSettings(),
     )

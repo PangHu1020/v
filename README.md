@@ -68,7 +68,7 @@ Anyone building or studying **production-shaped Agentic systems over IM**: the s
 | **Debounce** | 500ms idle window merges message bursts into one turn before the bus |
 | **Agent graph** | LangGraph: enter → compress → intent classify → agent → tool loop → reflect → exit |
 | **Cascade RAG** | Stage-1 dense cosine → Stage-2 hybrid (dense+BM25 WeightedRanker) → Stage-3 LLM structural rewrite + hybrid |
-| **Tools** | `calculator` (safe AST), `search` (Milvus knowledge recall), `recall_memory` (per-customer episodic), `subagent` (isolated single-shot delegate) |
+| **Tools** | `calculator` (safe AST), `search` (Milvus knowledge recall), `recall_memory` (per-customer episodic), `subagent` (isolated single-shot delegate) + external **MCP tools** (OAuth-authed, cached) |
 | **Memory** | Redis working memory (TTL) + Postgres `event_memory` (pgvector, 30-day) + `user_profile` (permanent JSONB) |
 | **Consolidation** | Mid-session extraction at token threshold; session-end promotion (working memory → profile + events), or extract-from-history for short sessions |
 | **Reflection** | Post-answer fact-check against tool results; bounded retry on hallucination |
@@ -372,6 +372,26 @@ Three temperature tiers, all sentence-shaped via `MemoryEntry`:
 - `generate/` — `run_generate_eval.py` scores answers with RAGAS 0.4 (Faithfulness / ContextRecall / AnswerRelevancy / AnswerCorrectness). The judge LLM is fixed to DeepSeek for apples-to-apples comparison; `--gen-model` overrides only the generation model (e.g. `qwen3-8b --no-think`).
 - `system/` — `run_system_eval.py` runs the full graph per query, capturing latency p50/p95/p99 and token counts (via a LangChain callback), with a configurable price table for cost estimation.
 - `gen/` — LLM generators that build the catalog, QA pairs, and difficulty scores; `seed_milvus.py` embeds the corpus into Milvus with the production schema.
+
+</details>
+
+<details>
+<summary>7. MCP Integration (click me)</summary>
+
+`backend/v/mcp/` connects the agent to external [Model Context Protocol](https://modelcontextprotocol.io) servers (stdio / streamable-HTTP / SSE) and exposes their tools alongside the built-ins.
+
+- **Auth**: OAuth 2.0 **client_credentials** (machine-to-machine) via `oauth.py` — the backend exchanges `client_id`/`client_secret` for a bearer token, cached in-process and auto-refreshed ~30s before expiry. Also supports `api_key` (static Bearer) and `none`. `client.py` resolves the bearer at connect time.
+- **Tool naming**: `{server_id}__{tool_name}` so two servers can expose the same tool name without colliding.
+- **Caching** (`cache.py`): read-class tool results go through L1 (in-memory, 5-min) + L2 (Redis, 24-h), keyed by `sha256(canonical args)`. Write-class tools (declared per-server in `write_tools`) skip the cache.
+- **Lifecycle** (`registry.py`): `MCPRegistry.connect_all()` runs at FastAPI startup, discovers each server's tools, and `build_graph(..., extra_tools=mcp_tools)` binds them to the LLM + the guarded `ToolNode`. Closed on shutdown. Empty `MCP_SERVERS_JSON` → disabled, zero overhead.
+- **Mock server** (`scripts/mock_mcp_server.py`): a standalone FastMCP HTTP server with a `/token` endpoint + three bearer-gated tools — `query_order`, `query_logistics`, `create_handoff_ticket` (hardcoded fake data). Exercises the full OAuth → JSON-RPC path locally; swap for a real server by changing only the `url`/credentials.
+
+```bash
+# 1. start the mock server (listens on :9100)
+uv run python -m scripts.mock_mcp_server
+
+# 2. point the agent at it (see .env.example MCP_SERVERS_JSON), then start the app
+```
 
 </details>
 
