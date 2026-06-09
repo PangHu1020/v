@@ -38,39 +38,43 @@
 
 ## 三级瀑布流检索（端到端）
 
+每一级用**相对 margin 置信门控**（`backend/v/rag/gate.py`）决定是否退出：top-1 要过绝对 `floor`，且与第二名的相对差 `(top1−top2)/top1` 要 ≥ `rel_margin`。相对 margin 尺度无关——dense cosine（~0.6–0.95）和未归一化的 hybrid 融合排名分（~0.4–0.9）共用同一套逻辑。
+
 ```
 query
   │
   ▼ stage-1: dense cosine search
-  │ score ≥ 0.76 → 返回（~60%）
+  │ 门控退出：top1 ≥ 0.70 → 返回（~77%）
   │
   ▼ stage-2: hybrid WeightedRanker (dense 0.5 + BM25 0.5)
-  │ score ≥ 0.41 → 返回（~30%）
+  │ 门控退出：(top1−top2)/top1 ≥ 0.04 → 返回（~7%）
   │
   ▼ stage-3: LLM 结构化重写 + hybrid search
-    返回（~10%）
+    返回（~16%）
 ```
+
+门控参数由 `backend.eval.retrieval.calibrate` 在 337-QA 集上按 Youden's J 自动校准（非手拍），换模型/语料后重跑即可。
 
 ### 端到端评测结果（337 条，top_k=5）
 
 | 指标 | hit@1 | hit@3 | hit@5 | MRR@5 | nDCG@5 |
 |------|-------|-------|-------|-------|--------|
-| **整体** | 0.846 | 0.976 | **0.982** | 0.907 | 0.927 |
+| **整体** | 0.855 | 0.970 | **0.985** | 0.912 | 0.931 |
 | easy | 0.970 | 1.000 | 1.000 | 0.985 | 0.989 |
-| medium | 0.828 | 0.975 | 0.980 | 0.896 | 0.918 |
-| hard | 0.776 | 0.955 | 0.970 | 0.864 | 0.892 |
-| product | 0.915 | 0.962 | 0.972 | 0.937 | 0.946 |
-| faq | 0.728 | 1.000 | 1.000 | 0.855 | 0.892 |
+| medium | 0.833 | 0.980 | 0.990 | 0.904 | 0.926 |
+| hard | 0.806 | 0.910 | 0.955 | 0.866 | 0.889 |
+| noisy | 0.841 | 0.905 | 0.952 | 0.881 | 0.899 |
+| product | 0.934 | 0.962 | 0.981 | 0.951 | 0.959 |
+| faq | 0.720 | 0.984 | 0.992 | 0.847 | 0.884 |
 
-Stage 拦截分布：202 : 100 : 35 ≈ **60% : 30% : 10%**
-
-延迟：mean=7.5s / p50=8.0s / p95=13.5s（含网络 + embedding + LLM rewrite 调用）
+Stage 拦截分布：260 : 24 : 53 ≈ **77% : 7% : 16%**
 
 ### 关键观察
 
-- FAQ hit@1=0.728 弱于产品（0.915），但 hit@3 即达 1.000 ——相关文档被检索到但排名靠后，可通过更丰富的 FAQ chunk 文本改善
-- hard 查询（LLM 打分 3 分）hit@3=0.955，说明 stage-3 rewrite 有效兜底
-- noisy tier 是最难的单个风格（hit@5=0.937），stage-3 是唯一能提升它的机制
+- **相对 margin 门控 vs 旧硬阈值**：noisy tier hit@1 从 0.762 → 0.841（+7.9pp），整体 hit@1 0.846 → 0.855、hit@5 0.982 → 0.985。两级门控 FPR=0（gold 不在结果里时绝不早退）。
+- stage-1 用绝对 floor（dense cosine 这层 floor 就是最好判别器），stage-2 用纯相对 margin（��合排名分未归一化，绝对阈值无意义）——这正是旧的 `0.41` magic number 修不掉的问题。
+- FAQ hit@1=0.720 弱于产品（0.934），但 hit@3 即达 0.984——相关文档被检索到但排名靠后。
+- hard / noisy 主要靠 stage-3 rewrite 兜底。
 
 ## 参数说明
 
@@ -82,12 +86,16 @@ Stage 拦截分布：202 : 100 : 35 ≈ **60% : 30% : 10%**
 | `MILVUS_TOKEN` | `""` | Milvus Cloud API key，本地留空 |
 | `MILVUS_COLLECTION_NAME` | `knowledge_chunks` | 知识库 collection 名 |
 
-### RAG 检索参数（`RAG_*`）
+### RAG 门控参数（`RAG_*`）
+
+每级门控两个参数，由 `calibrate` 自动写入；手动调见 `config.yaml`。
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `RAG_MIN_SCORE` | `0.76` | Stage-1 dense cosine 退出阈值；score ≥ 此值直接返回（~60% 查询） |
-| `RAG_STAGE2_MIN_SCORE` | `0.41` | Stage-2 hybrid WeightedRanker 退出阈值；注意 hybrid score 量纲与 dense 不同（~0.40–0.90） |
+| `RAG_STAGE1_FLOOR` | `0.70` | Stage-1 top-1 绝对下限（dense cosine） |
+| `RAG_STAGE1_REL_MARGIN` | `0.0` | Stage-1 相对分离度下限（这层 floor 主导，故为 0） |
+| `RAG_STAGE2_FLOOR` | `0.0` | Stage-2 绝对下限（hybrid 分数未归一化，故为 0） |
+| `RAG_STAGE2_REL_MARGIN` | `0.04` | Stage-2 相对分离度 `(top1−top2)/top1` 下限 |
 | `RAG_MIN_K` | `3` | 至少要返回的结果数，低于此数不退出 |
 | `RAG_DENSE_WEIGHT` | `0.5` | Hybrid 中 dense 分支权重 |
 | `RAG_BM25_WEIGHT` | `0.5` | Hybrid 中 BM25 稀疏分支权重 |
@@ -143,8 +151,10 @@ uv run python -m backend.eval.seed_milvus
 |------|------|
 | `retrieval/run_eval.py` | 级联检索 recall/MRR/nDCG/hit，按 difficulty/tier/stage 分维度 |
 | `retrieval/run_ablation.py` | 单策略对比（dense / hybrid variants / rewrite+hybrid） |
+| `retrieval/calibrate.py` | 按 Youden's J 校准每级门控的 floor + rel_margin，`--write` 写入 config.yaml |
 
 ```bash
+uv run python -m backend.eval.retrieval.calibrate --write   # 校准门控参数
 uv run python -m backend.eval.retrieval.run_eval
 uv run python -m backend.eval.retrieval.run_ablation --no-rewrite
 ```

@@ -121,7 +121,7 @@ backend/
 
 ### 4.6 `KnowledgeRetriever` ([backend/v/rag/retriever.py](../backend/v/rag/retriever.py))
 
-共享知识语料库（Milvus `knowledge_chunks` collection）的唯一查询入口。三级 cascade：dense cosine（stage-1） → hybrid BM25+dense（stage-2） → LLM 结构化重写 + hybrid（stage-3）。阈值 RAG_MIN_SCORE=0.76 / RAG_STAGE2_MIN_SCORE=0.41，实测 stage 分布 ≈ 60%:30%:10%。详见 `backend/eval/README.md`。
+共享知识语料库（Milvus `knowledge_chunks` collection）的唯一查询入口。三级 cascade：dense cosine（stage-1） → hybrid BM25+dense（stage-2） → LLM 结构化重写 + hybrid（stage-3）。每级用**相对 margin 置信门控**（`v/rag/gate.py`）决定退出：top-1 过绝对 floor 且 `(top1−top2)/top1 ≥ rel_margin`。门控参数由 `backend.eval.retrieval.calibrate` 在 337-QA 集上按 Youden's J 自动校准（stage1 floor=0.70 / stage2 rel_margin=0.04），实测 hit@5=0.985、stage 分布 ≈ 77%:7%:16%。详见 `backend/eval/README.md`。
 
 ### 4.8 `SkillRegistry` ([backend/v/skills/registry.py](../backend/v/skills/registry.py))
 

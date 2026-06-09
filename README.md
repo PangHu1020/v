@@ -27,7 +27,7 @@ v-agent-platform is a reactive customer-service agent that answers customer inqu
 **Key highlights:**
 
 - LangGraph state machine: `enter → compress → intent → agent → [tools]* → reflect → exit`
-- Three-stage cascade RAG: dense → hybrid (BM25+dense) → LLM structural rewrite, with tuned thresholds
+- Three-stage cascade RAG: dense → hybrid (BM25+dense) → LLM structural rewrite, gated by a **scale-invariant relative-margin confidence gate** (auto-calibrated from the labelled QA set)
 - Hierarchical memory: Redis working memory (hot) → Postgres `event_memory` (30-day vector recall) → `user_profile` (permanent)
 - Token-efficient memory consolidation: extract mid-session at compression, promote at session end — no redundant LLM passes
 - Strict per-shard serial ordering by `(channel, channel_user_id)`
@@ -221,7 +221,7 @@ The YAML is *sectioned by reflection*: each top-level key maps to an `AppSetting
 | WeCom AiBot | `WECOM_AIBOT_WS_URL` / `WECOM_AIBOT_BOT_ID` / `WECOM_AIBOT_SECRET` |
 | LangSmith (optional) | `LANGSMITH_TRACING` / `LANGSMITH_API_KEY` |
 
-`config.yaml` tunables (see `config.example.yaml`): `llm.main_primary/fallback`, `embedding.model`, `memory.*` TTLs + compression thresholds, `bus.shard_count/debounce_ms`, `rag.min_score/stage2_min_score/weights`, `milvus.uri/collection_name`.
+`config.yaml` tunables (see `config.example.yaml`): `llm.main_primary/fallback`, `embedding.model`, `memory.*` TTLs + compression thresholds, `bus.shard_count/debounce_ms`, `rag.stage1_floor/stage1_rel_margin/stage2_floor/stage2_rel_margin/weights`, `milvus.uri/collection_name`. The `rag.*` gate params are best set with `python -m backend.eval.retrieval.calibrate --write`.
 
 Leaving `WECOM_AIBOT_WS_URL` empty disables the WS worker (it exits immediately on start).
 
@@ -278,7 +278,7 @@ uv run python -m backend.eval.generate.run_generate_eval --gen-model qwen3-8b --
 uv run python -m backend.eval.system.run_system_eval
 ```
 
-Headline retrieval result (337 queries, top_k=5): **hit@5 = 0.982**, cascade stage split ≈ 60% : 30% : 10% (dense : hybrid : rewrite).
+Headline retrieval result (337 queries, top_k=5): **hit@5 = 0.985**, cascade stage split ≈ 77% : 7% : 16% (dense : hybrid : rewrite).
 
 ---
 
@@ -312,14 +312,15 @@ enter → compress → intent → agent → route_after_agent ─┬→ tools �
 
 ```
 query
-  ▼ Stage-1: dense cosine search          score ≥ 0.76  → return (~60%)
-  ▼ Stage-2: hybrid WeightedRanker         score ≥ 0.41  → return (~30%)
-  ▼ Stage-3: LLM structural rewrite + hybrid             → return (~10%)
+  ▼ Stage-1: dense cosine search       gate exits if top1 ≥ 0.70           → return (~77%)
+  ▼ Stage-2: hybrid WeightedRanker      gate exits if (top1−top2)/top1 ≥ 0.04 → return (~7%)
+  ▼ Stage-3: LLM structural rewrite + hybrid                              → return (~16%)
 ```
 
+- Each stage exits via a **relative-margin confidence gate** (`backend/v/rag/gate.py`): top-1 must clear an absolute `floor` AND be separated from the runner-up by a relative `rel_margin` = `(top1−top2)/top1`. The margin is scale-invariant, so the same logic works for dense cosine (~0.6–0.95) and the unnormalized hybrid fused-rank score (~0.4–0.9) — which is why stage-2 uses margin-only (`floor=0`) while stage-1 uses floor-only.
 - Collection schema: `source_type`, `source_id`, `text` (BM25-analyzed), `embedding` (FLOAT_VECTOR 1024), `sparse_embedding` (auto from BM25 Function), `metadata` (JSON).
 - Indexes: HNSW (M=16, efConstruction=64, COSINE) + SPARSE_INVERTED_INDEX (BM25).
-- Stage-2/3 thresholds were tuned on the eval corpus; note hybrid WeightedRanker scores live on a different scale (~0.40–0.90) than dense cosine (~0.60–0.95).
+- Gate params are calibrated on the 337-QA eval set by Youden's J (`backend.eval.retrieval.calibrate`), not hand-picked — re-runnable after a model/corpus change.
 
 The `search` tool is a thin `@tool` wrapper over this retriever; the seeder reuses the exact same collection setup for schema parity.
 
