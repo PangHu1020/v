@@ -136,25 +136,25 @@ class TestYamlConfig:
     def test_yaml_overrides_code_default(self, tmp_path, monkeypatch) -> None:
         p = self._write_yaml(
             tmp_path,
-            "rag:\n  min_score: 0.5\n  min_k: 7\nbus:\n  shard_count: 128\n",
+            "rag:\n  stage1_floor: 0.5\n  min_k: 7\nbus:\n  shard_count: 128\n",
         )
         monkeypatch.setenv("APP_CONFIG_FILE", str(p))
         # Clear any ambient env vars so we test the YAML > default layer.
-        for k in ("RAG_MIN_SCORE", "RAG_MIN_K", "BUS_SHARD_COUNT"):
+        for k in ("RAG_STAGE1_FLOOR", "RAG_MIN_K", "BUS_SHARD_COUNT"):
             monkeypatch.delenv(k, raising=False)
-        assert RAGSettings(_env_file=None).min_score == 0.5
+        assert RAGSettings(_env_file=None).stage1_floor == 0.5
         assert RAGSettings(_env_file=None).min_k == 7
         assert BusSettings(_env_file=None).shard_count == 128
 
     def test_env_overrides_yaml(self, tmp_path, monkeypatch) -> None:
-        p = self._write_yaml(tmp_path, "rag:\n  min_score: 0.5\n")
+        p = self._write_yaml(tmp_path, "rag:\n  stage1_floor: 0.5\n")
         monkeypatch.setenv("APP_CONFIG_FILE", str(p))
-        monkeypatch.setenv("RAG_MIN_SCORE", "0.9")
+        monkeypatch.setenv("RAG_STAGE1_FLOOR", "0.9")
         # env var wins over YAML
-        assert RAGSettings(_env_file=None).min_score == 0.9
+        assert RAGSettings(_env_file=None).stage1_floor == 0.9
 
     def test_missing_section_falls_back_to_default(self, tmp_path, monkeypatch) -> None:
-        p = self._write_yaml(tmp_path, "rag:\n  min_score: 0.5\n")
+        p = self._write_yaml(tmp_path, "rag:\n  stage1_floor: 0.5\n")
         monkeypatch.setenv("APP_CONFIG_FILE", str(p))
         monkeypatch.delenv("LLM_MAIN_PRIMARY", raising=False)
         # llm section absent from YAML → code defaults
@@ -165,8 +165,8 @@ class TestYamlConfig:
 
         _load_yaml.cache_clear()
         monkeypatch.setenv("APP_CONFIG_FILE", str(tmp_path / "does-not-exist.yaml"))
-        monkeypatch.delenv("RAG_MIN_SCORE", raising=False)
-        assert RAGSettings(_env_file=None).min_score == 0.76  # code default
+        monkeypatch.delenv("RAG_STAGE1_FLOOR", raising=False)
+        assert RAGSettings(_env_file=None).stage1_floor == 0.60  # code default
 
     def test_yaml_respects_validation(self, tmp_path, monkeypatch) -> None:
         # shard_count has ge=1, le=4096 — an out-of-range YAML value must raise

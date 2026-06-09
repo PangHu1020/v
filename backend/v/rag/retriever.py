@@ -17,6 +17,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from backend.v.configs.base import get_settings
+from backend.v.rag.gate import GateParams, should_exit
 from backend.v.utils.logging import get_logger
 
 try:
@@ -312,7 +313,12 @@ class KnowledgeRetriever:
         )
 
         max_score = max((r["similarity"] for r in results), default=0.0)
-        if len(results) >= rag_cfg.min_k and max_score >= rag_cfg.min_score:
+        stage1_gate = GateParams(
+            floor=rag_cfg.stage1_floor,
+            rel_margin=rag_cfg.stage1_rel_margin,
+            min_k=rag_cfg.min_k,
+        )
+        if should_exit([r["similarity"] for r in results], stage1_gate):
             _log.info(
                 "rag.retriever.cascade.stage1_success",
                 count=len(results),
@@ -339,7 +345,12 @@ class KnowledgeRetriever:
         )
 
         max_score = max((r["similarity"] for r in results), default=0.0)
-        if len(results) >= rag_cfg.min_k and max_score >= rag_cfg.stage2_min_score:
+        stage2_gate = GateParams(
+            floor=rag_cfg.stage2_floor,
+            rel_margin=rag_cfg.stage2_rel_margin,
+            min_k=rag_cfg.min_k,
+        )
+        if should_exit([r["similarity"] for r in results], stage2_gate):
             _log.info(
                 "rag.retriever.cascade.stage2_success",
                 count=len(results),

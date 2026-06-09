@@ -54,7 +54,15 @@ def _hit(source_id: str, text: str, source_type: str = "product", score: float =
 def _settings() -> MagicMock:
     cfg = MagicMock()
     cfg.milvus = MilvusSettings(uri="http://localhost:19530", token="", collection_name="test")
-    cfg.rag = RAGSettings(min_score=0.7, min_k=2, dense_weight=0.5, bm25_weight=0.5)
+    cfg.rag = RAGSettings(
+        stage1_floor=0.7,
+        stage1_rel_margin=0.0,
+        stage2_floor=0.0,
+        stage2_rel_margin=0.0,
+        min_k=2,
+        dense_weight=0.5,
+        bm25_weight=0.5,
+    )
     return cfg
 
 

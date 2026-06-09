@@ -17,7 +17,7 @@ runtime:
 llm:
   # base_url_* / api_key_* are secrets → set in .env
   main_primary: deepseek-v4-flash      # main reasoning model
-  main_fallback: deepseek-v3.1         # same-family fallback on timeout/5xx/429
+  main_fallback: qwen3.6-plus       # same-family fallback on timeout/5xx/429
   timeout_seconds: 30                  # per-call timeout before fallback
 
 embedding:
@@ -38,8 +38,13 @@ bus:
   debounce_ms: 500                     # message-burst merge window
 
 rag:
-  min_score: 0.76                      # stage-1 dense cosine exit threshold
-  stage2_min_score: 0.41               # stage-2 hybrid exit threshold (different scale!)
+  # Cascade confidence gate (relative-margin + low floor, per stage).
+  # A stage exits when top-1 >= floor AND (top1-top2)/top1 >= rel_margin.
+  # Set these via `python -m backend.eval.retrieval.calibrate`, don't hand-pick.
+  stage1_floor: 0.60                   # stage-1 dense cosine absolute floor
+  stage1_rel_margin: 0.05              # stage-1 min relative separation
+  stage2_floor: 0.0                    # stage-2 hybrid floor (unnormalized scale)
+  stage2_rel_margin: 0.05              # stage-2 min relative separation
   min_k: 3                             # min results before a stage may exit
   dense_weight: 0.5                    # hybrid dense branch weight
   bm25_weight: 0.5                     # hybrid BM25 branch weight

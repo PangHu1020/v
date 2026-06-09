@@ -310,18 +310,26 @@ class MilvusSettings(_YamlSettings):
 class RAGSettings(_YamlSettings):
     """RAG cascade search parameters.
 
-    Thresholds derived from eval/ablation on a 150-doc corpus:
-    - Stage-1 dense cosine exit at ``min_score`` (~60% of queries).
-    - Stage-2 hybrid WeightedRanker exit at ``stage2_min_score`` (~30%).
-    - Remaining ~10% reach the Stage-3 LLM rewrite.
-    Note hybrid scores live on a different scale (~0.40–0.90) than dense
-    cosine (~0.60–0.95); tune the two thresholds independently in config.yaml.
+    The cascade uses a **relative-margin confidence gate** per stage (see
+    :mod:`backend.v.rag.gate`), not a single absolute score cutoff. A stage
+    exits when its top hit clears a low absolute ``floor`` AND is separated
+    from the runner-up by at least ``rel_margin`` ((top1-top2)/top1). The
+    margin is scale-invariant, so the same params hold for dense cosine
+    (stage 1) and the unnormalized hybrid fused-rank score (stage 2).
+
+    All four gate params are best set by ``backend.eval.retrieval.calibrate``
+    (grid-search over the labelled QA set), not hand-picked.
     """
 
     model_config = SettingsConfigDict(**_COMMON, env_prefix="RAG_")
 
-    min_score: float = Field(default=0.76, ge=0.0, le=1.0)
-    stage2_min_score: float = Field(default=0.41, ge=0.0, le=1.0)
+    # Stage-1 (dense cosine) exit gate.
+    stage1_floor: float = Field(default=0.60, ge=0.0, le=1.0)
+    stage1_rel_margin: float = Field(default=0.05, ge=0.0, le=1.0)
+    # Stage-2 (hybrid WeightedRanker) exit gate.
+    stage2_floor: float = Field(default=0.0, ge=0.0, le=1.0)
+    stage2_rel_margin: float = Field(default=0.05, ge=0.0, le=1.0)
+
     min_k: int = Field(default=3, ge=1)
     dense_weight: float = Field(default=0.5, ge=0.0, le=1.0)
     bm25_weight: float = Field(default=0.5, ge=0.0, le=1.0)
