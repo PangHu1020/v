@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.v.memory.types import MemoryEntry
+from backend.v.memory.types import ConversationState, MemoryEntry
 
 # ── Long-term promotion (working memory → profile + event_memory) ────────────
 
@@ -86,26 +86,37 @@ created_at 没把握就省略，会被默认值填上当前时间。
 # ── Mid-session extraction (compression) ─────────────────────────────────────
 
 MID_SESSION_EXTRACTION_SYSTEM_PROMPT = """<role>
-你是一名会话记忆整理员。在对话中段（上下文压缩时）提炼本轮已截断对话的关键信息。
+你是一名会话记忆整理员。在对话中段（上下文压缩时），既要提炼可沉淀的记忆，\
+又要产出一份"对话状态快照"，让压缩掉旧消息后对话仍能无缝衔接。
 </role>
 
 <task>
-读取 <conversation>（截断的历史对话），输出 ExtractionResult：
-- working_memories：本次会话内仍有用的短期记忆，下轮对话注入 system prompt。
+读取 <conversation>（即将被截断的历史对话），输出 ExtractionResult：
+- conversation_state：本次对话的结构化状态快照（用于压缩后无缝衔接，最关键）。
+- working_memories：本次会话内仍有用的短期记忆，下轮注入 system prompt。
 - event_memories：值得 30 天内跨会话召回的具体事实。
 - profile_updates：保持空 dict——会话未结束，不修改长期画像。
 </task>
 
 <output_format>
-仅输出 JSON，键名：profile_updates（空 dict）、working_memories、event_memories。
+仅输出 JSON，键名：conversation_state、working_memories、event_memories、\
+profile_updates（空 dict）。
+conversation_state 字段：
+- current_topic：一句话说明"现在在聊什么"。
+- events：按顺序列出发生过的关键事件（客户问了X、确认了Y、AI查了Z）。
+- actions_taken：AI 已经执行的动作（调用过的工具、给出的信息、做出的承诺）。
+- unresolved_questions：尚未解决的问题 / 待办。
+- key_facts：已确认的具体事实（订单号、金额、SKU、日期、运单号等）。
 每条 MemoryEntry：{content, kind, importance(0-1), keywords}。
 </output_format>
 
 <rules>
+- conversation_state 要让接手者读完就能继续对话，不丢上下文；用简短中文，不要客套。
+- key_facts 必须是对话里真实出现的具体值，禁止编造。
 - working_memories：客户本次表达的偏好、待处理诉求、临时背景信息。importance >= 0.4。
 - event_memories：具体可引用的事实（订单号、投诉内容、特殊需求）。importance >= 0.3。
-- 不要重复两个列表里的相同信息；偏好类放 working，事件类放 event。
-- 没有可提取信息时给空数组，禁止编造。
+- 不要重复两个记忆列表里的相同信息；偏好类放 working，事件类放 event。
+- 没有可提取的记忆时给空数组；但 conversation_state 应尽量填充，除非对话确实无实质内容。
 </rules>"""
 
 
@@ -163,6 +174,35 @@ def render_session_memory_for_prompt(entries: list[MemoryEntry]) -> str:
             attrs.append(f'keywords="{",".join(e.keywords)}"')
         lines.append(f"  <entry {' '.join(attrs)}>{e.content}</entry>")
     lines.append("</session_memory>")
+    return "\n".join(lines)
+
+
+# ── Renderer for the structured conversation-state summary ───────────────────
+
+
+def render_conversation_state(state: ConversationState) -> str:
+    """Render a :class:`ConversationState` as a ``<conversation_state>`` block.
+
+    Injected by the compression node in place of the dropped turns so the agent
+    resumes seamlessly. Empty instance returns ``""``.
+    """
+    if state.is_empty():
+        return ""
+    lines: list[str] = ["<conversation_state>"]
+    if state.current_topic:
+        lines.append(f"  <current_topic>{state.current_topic}</current_topic>")
+
+    def _list_block(tag: str, items: list[str]) -> None:
+        if items:
+            lines.append(f"  <{tag}>")
+            lines.extend(f"    <item>{it}</item>" for it in items)
+            lines.append(f"  </{tag}>")
+
+    _list_block("events", state.events)
+    _list_block("actions_taken", state.actions_taken)
+    _list_block("unresolved_questions", state.unresolved_questions)
+    _list_block("key_facts", state.key_facts)
+    lines.append("</conversation_state>")
     return "\n".join(lines)
 
 

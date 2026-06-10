@@ -1,18 +1,27 @@
 """LangGraph nodes: enter -> compress -> agent (with tools) -> exit.
 
-``enter_node`` builds the per-turn system prompt by stacking layers:
+``enter_node`` assembles the prompt in **cold → hot volatility tiers** so the
+leading token prefix stays byte-identical across turns (and, for the cold
+tier, across sessions) — maximizing DeepSeek/Qwen automatic prefix-cache hits.
 
-1. Base persona + channel context (static, from agents/prompts).
-2. ``<customer_profile>``  — full long-term profile (every populated
-   canonical field + every extras key + notes if present).
-3. ``<recent_events>``     — most-recent N rows of ``agent.event_memory``.
-4. ``<session_memory>``    — current session's working-memory entries.
-5. ``<sops>``              — matched skills / SOPs.
+Message layout after ``enter_node`` (turn 1):
 
-Layers stacked in that order so the prompt-level rule "later layers
-override earlier ones on conflicts" lines up with the storage tier
-freshness: profile (oldest) < events (medium-term) < session memory
-(this session) < SOPs (current intent guidance).
+    [0] COLD  SystemMessage — base persona + channel + <available_skills> catalog.
+              Customer-independent; identical across every session on this
+              channel → shared prefix cache.
+    [1] WARM  SystemMessage — <customer_profile> + <recent_events> +
+              <session_memory>. Customer-specific; frozen for the session until
+              a compression event rebuilds it.
+    [2..] HOT conversation history — append-only.
+
+Tool / MCP schemas ride in the request's ``tools`` param (bound once per build),
+which sits in the same cached prefix. Skills use **progressive disclosure**: the
+cold catalog advertises names+descriptions; the model pulls a full SOP body on
+demand via the ``load_skill`` tool, which appends to history (hot) rather than
+mutating the frozen system prefix.
+
+Conflict-resolution rule (unchanged): hotter content shadows colder on
+conflicts — session memory > recent events > profile.
 """
 
 from __future__ import annotations
@@ -20,7 +29,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import RemoveMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 from backend.v.agents.prompts import build_main_system_prompt
@@ -32,20 +41,13 @@ from backend.v.memory.prompts import (
 from backend.v.memory.types import MemoryEntry, UserProfile
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.skills import SkillRegistry
-from backend.v.tools import calculator, recall_memory, search, subagent
+from backend.v.tools import calculator, load_skill, recall_memory, search, subagent
 from backend.v.utils.logging import get_logger
 
 _log = get_logger("agents.nodes")
 
-AGENT_TOOLS: list = [calculator, search, recall_memory, subagent]
+AGENT_TOOLS: list = [calculator, search, recall_memory, subagent, load_skill]
 """Tools bound to the main agent."""
-
-
-def _latest_human_text(messages: list) -> str:
-    for m in reversed(messages):
-        if isinstance(m, HumanMessage):
-            return m.content if isinstance(m.content, str) else ""
-    return ""
 
 
 def _render_profile(profile: dict[str, Any] | None) -> str:
@@ -102,71 +104,73 @@ def _render_profile(profile: dict[str, Any] | None) -> str:
     return "<customer_profile>\n" + "\n".join(bits) + "\n</customer_profile>"
 
 
-def _maybe_skill_section(
-    skill_registry: SkillRegistry | None,
-    *,
-    query: str,
-    channel: str,
-    top_k: int,
-) -> str:
-    """Return the rendered skills block (possibly empty) for appending."""
-    if skill_registry is None or top_k <= 0 or not query:
-        return ""
-    matched = skill_registry.match(query, channel=channel, top_k=top_k)
-    if not matched:
-        return ""
-    return skill_registry.render_for_prompt(matched)
+def _build_cold_layer(channel: str, skill_registry: SkillRegistry | None) -> str:
+    """Customer-independent system text: persona + channel + skill catalog.
+
+    Identical for every customer on the same channel, so the token prefix is
+    shared across sessions in the provider's cache.
+    """
+    sections = [build_main_system_prompt(channel)]
+    if skill_registry is not None and len(skill_registry):
+        catalog = skill_registry.render_catalog(channel=channel)
+        if catalog:
+            sections.append(f"<available_skills>\n{catalog}\n</available_skills>")
+    return "\n\n".join(sections)
+
+
+def _build_warm_layer(state: CustomerServiceState) -> str:
+    """Customer-specific memory text: profile + recent events + session memory."""
+    sections: list[str] = []
+    profile_block = _render_profile(state.get("user_profile"))
+    if profile_block:
+        sections.append(profile_block)
+    events_block = render_recent_events_for_prompt(state.get("recent_events") or [])
+    if events_block:
+        sections.append(f"<recent_events>\n{events_block}\n</recent_events>")
+    working: list[MemoryEntry] = state.get("working_memory") or []
+    session_memory_block = render_session_memory_for_prompt(working)
+    if session_memory_block:
+        sections.append(session_memory_block)
+    return "\n\n".join(sections)
 
 
 async def enter_node(
     state: CustomerServiceState,
     config: RunnableConfig,
 ) -> dict[str, Any]:
-    """Prepend the layered system prompt on first turn of a thread.
+    """Inject the cold + warm system layers on the first turn of a thread.
 
-    On subsequent turns the messages already include a leading
-    SystemMessage (the checkpointer keeps it) and we leave them
-    untouched.
+    Emits two ordered ``SystemMessage``s (cold, then warm) and reorders the
+    turn's existing messages to sit *after* them, so the cache-stable system
+    prefix leads the request. On later turns a leading SystemMessage already
+    exists (kept by the checkpointer) and we no-op — the prefix stays frozen
+    until a compression event rebuilds the warm layer.
     """
-    messages = state.get("messages", [])
+    messages = list(state.get("messages", []))
     if any(isinstance(m, SystemMessage) for m in messages):
         return {}
     cfg = config.get("configurable", {}) if config else {}
+    channel = state.get("channel", "")
 
-    sections: list[str] = [build_main_system_prompt(state.get("channel", ""))]
+    cold_text = _build_cold_layer(channel, cfg.get("skill_registry"))
+    warm_text = _build_warm_layer(state)
 
-    profile_block = _render_profile(state.get("user_profile"))
-    if profile_block:
-        sections.append(profile_block)
+    new_messages: list[Any] = [SystemMessage(content=cold_text)]
+    if warm_text:
+        new_messages.append(SystemMessage(content=warm_text))
 
-    events_block = render_recent_events_for_prompt(state.get("recent_events") or [])
-    if events_block:
-        sections.append(f"<recent_events>\n{events_block}\n</recent_events>")
+    # Reorder so the system layers lead: drop the existing (pre-system) messages
+    # and re-append them after, with fresh ids (add_messages assigns new uuids).
+    removals = [RemoveMessage(id=m.id) for m in messages if getattr(m, "id", None)]
+    readded = [m.model_copy(update={"id": None}) for m in messages]
 
-    working: list[MemoryEntry] = state.get("working_memory") or []
-    session_memory_block = render_session_memory_for_prompt(working)
-    if session_memory_block:
-        sections.append(session_memory_block)
-
-    skill_section = _maybe_skill_section(
-        cfg.get("skill_registry"),
-        query=_latest_human_text(messages),
-        channel=state.get("channel", ""),
-        top_k=int(cfg.get("skill_top_k", 3)),
-    )
-    if skill_section:
-        sections.append(f"<sops>\n{skill_section}\n</sops>")
-
-    full_prompt = "\n\n".join(sections)
     _log.info(
         "agents.enter_node.injected",
-        prompt_len=len(full_prompt),
-        has_profile=bool(profile_block),
-        events=len(state.get("recent_events") or []),
-        working=len(working),
-        has_skills=bool(skill_section),
+        cold_len=len(cold_text),
+        warm_len=len(warm_text),
+        reordered=len(messages),
     )
-    return {"messages": [SystemMessage(content=full_prompt)]}
+    return {"messages": [*removals, *new_messages, *readded]}
 
 
 async def agent_node(

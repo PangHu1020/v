@@ -20,6 +20,8 @@ Style conventions (apply to every prompt in this file):
 
 from __future__ import annotations
 
+from typing import Any
+
 # ── Main customer-service agent ───────────────────────────────────────────────
 
 
@@ -140,16 +142,53 @@ issues 列出每一处问题，使用一句话陈述（例如"伪造单号 SF999
 # ── Mid-session compression: replaces dropped history with a marker ───────────
 
 
-def build_compression_summary(narrative: str | None, session_memory_block: str) -> str:
-    """Build the SystemMessage that replaces dropped history.
+def _render_conversation_state(state: Any) -> str:
+    """Render a :class:`ConversationState` into a readable XML block.
 
-    Wrapped in ``<compressed_history>`` so the model sees an explicit
-    "this is not normal context, this is a summary of dropped messages"
-    boundary rather than mixing it with the live system prompt.
+    Returns ``""`` for ``None`` / empty so the caller can drop the section.
+    Typed as ``Any`` to avoid a memory→agents import edge; duck-typed on the
+    five fields + ``is_empty``.
     """
-    parts: list[str] = ["<compressed_history>", "（前文已被压缩为摘要，仅供参考，不是客户原话。）"]
-    if narrative:
-        parts.append(f"<narrative>\n{narrative}\n</narrative>")
+    if state is None or getattr(state, "is_empty", lambda: True)():
+        return ""
+    lines: list[str] = ["<conversation_state>"]
+    if state.current_topic:
+        lines.append(f"  <current_topic>{state.current_topic}</current_topic>")
+
+    def _list_block(tag: str, items: list[str]) -> None:
+        if items:
+            lines.append(f"  <{tag}>")
+            lines.extend(f"    - {it}" for it in items)
+            lines.append(f"  </{tag}>")
+
+    _list_block("events", state.events)
+    _list_block("actions_taken", state.actions_taken)
+    _list_block("unresolved_questions", state.unresolved_questions)
+    _list_block("key_facts", state.key_facts)
+    lines.append("</conversation_state>")
+    return "\n".join(lines)
+
+
+def build_compression_summary(
+    *,
+    conversation_state: Any = None,
+    session_memory_block: str = "",
+) -> str:
+    """Build the SystemMessage that replaces dropped history mid-session.
+
+    Wrapped in ``<compressed_history>`` so the model reads an explicit
+    "this is a summary of dropped turns, not live context" boundary. Inside it
+    carries the structured :class:`ConversationState` (current topic, events,
+    actions already taken, unresolved questions, key facts) so the agent
+    resumes the dialogue seamlessly, plus the current session-memory block.
+    """
+    parts: list[str] = [
+        "<compressed_history>",
+        "（前文已压缩为下面的结构化对话状态，仅供你延续对话用，不是客户原话。）",
+    ]
+    state_block = _render_conversation_state(conversation_state)
+    if state_block:
+        parts.append(state_block)
     if session_memory_block:
         parts.append(session_memory_block)
     parts.append("</compressed_history>")

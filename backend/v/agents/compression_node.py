@@ -126,7 +126,10 @@ async def compression_node(
     sm_block = render_session_memory_for_prompt(working_entries)
     removals = [RemoveMessage(id=mid) for m in head if (mid := getattr(m, "id", None))]
     compressed = SystemMessage(
-        content=build_compression_summary(narrative=None, session_memory_block=sm_block)
+        content=build_compression_summary(
+            conversation_state=extracted.conversation_state,
+            session_memory_block=sm_block,
+        )
     )
 
     _log.info(
@@ -135,5 +138,6 @@ async def compression_node(
         kept_recent=keep_recent,
         working_written=len(extracted.working_memories),
         events_written=len(extracted.event_memories),
+        has_state=extracted.conversation_state is not None,
     )
     return {"messages": [*removals, compressed, *tail]}

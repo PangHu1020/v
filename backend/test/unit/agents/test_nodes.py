@@ -100,11 +100,13 @@ class TestEnterNode:
             config={"configurable": {}},
         )
         assert "messages" in update
-        assert isinstance(update["messages"][0], SystemMessage)
-        content = update["messages"][0].content
-        assert "wecom" in content
-        assert "<customer_profile>" in content
-        assert "<member_level>黄金</member_level>" in content
+        systems = [m for m in update["messages"] if isinstance(m, SystemMessage)]
+        # Two layers: cold (persona + channel) then warm (customer profile).
+        assert len(systems) == 2
+        cold, warm = systems
+        assert "wecom" in cold.content
+        assert "<customer_profile>" in warm.content
+        assert "<member_level>黄金</member_level>" in warm.content
 
     async def test_layers_recent_events_and_working_memory(self) -> None:
         recent = [
@@ -134,12 +136,14 @@ class TestEnterNode:
             },
             config={"configurable": {}},
         )
-        content = update["messages"][0].content
+        systems = [m for m in update["messages"] if isinstance(m, SystemMessage)]
+        # Profile is empty here, so the warm layer carries events + session memory.
+        content = systems[1].content
         assert "<recent_events>" in content
         assert "投诉过物流延误" in content
         assert "<session_memory>" in content
         assert "本次会话偏好顺丰" in content
-        # Order: profile (empty here) → recent_events → session_memory.
+        # Order: recent_events → session_memory.
         assert content.index("<recent_events>") < content.index("<session_memory>")
 
     async def test_does_not_double_prepend(self) -> None:

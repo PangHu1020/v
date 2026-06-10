@@ -280,12 +280,20 @@ INSERT agent.    GET 命中             session 键自然过期    （+ 长记�
 **实现路径**：
 ```
 compression_node（graph 节点，token 超阈值时触发）：
-  1. LLM（memory_extract role）处理即将截断的 head 消息
+  1. LLM（memory_extract role）一次调用处理即将截断的 head 消息，输出 ExtractionResult：
+     conversation_state（结构化对话状态快照）+ working_memories + event_memories
   2. working_memories → Redis RPUSH working:{session_id}（TTL 同 session）
   3. event_memories → PG agent.event_memory + embed（call insert_event_memories）
-  4. 截断消息，注入 <compressed_history> + 最新 working memory 摘要
+  4. 截断 head 消息，注入 <compressed_history>：渲染 conversation_state
+     （current_topic / events / actions_taken / unresolved_questions / key_facts）
+     + 最新 working memory 摘要；保留最后 N 条消息原文
   注意：不更新 user_profile（会话未结束）
 ```
+
+**结构化对话状态（无缝衔接）**：`conversation_state` 与记忆是两件事——记忆是跨会话的持久事实，
+`conversation_state` 是**本会话的延续性快照**。压缩掉旧消息后，接手的模型读这份结构化摘要即可知道
+"现在在聊什么、已经做了什么、确认了哪些事实、还有什么没解决"，从而无缝继续对话。它和记忆提取
+**合并为一次 LLM 调用**，不额外消耗 token。
 
 **关键特性**：
 - `working_memories` 是**临时便签**：供本会话后续轮次快速访问，TTL 与 session 同步过期。

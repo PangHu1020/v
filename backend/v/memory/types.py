@@ -119,13 +119,61 @@ class UserProfile(BaseModel):
     )
 
 
+# ── Conversation-state summary (mid-session compression) ──────────────────────
+
+
+class ConversationState(BaseModel):
+    """Structured snapshot of the *current dialogue* at a compression point.
+
+    Distinct from memory (durable, cross-session facts about the customer):
+    this is the **this-session continuity** artifact. When mid-session
+    compression drops the older turns, this structured summary replaces them so
+    the agent resumes seamlessly — it knows the topic, what it already did, what
+    facts were established, and what is still open.
+
+    Rendered into the ``<compressed_history>`` block by the compression node.
+    All fields optional/empty-tolerant; an empty instance renders to nothing.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    current_topic: str = Field(
+        default="", description="What the conversation is about right now, one line."
+    )
+    events: list[str] = Field(
+        default_factory=list,
+        description="Key things that happened, in order (客户问了X、确认了Y).",
+    )
+    actions_taken: list[str] = Field(
+        default_factory=list,
+        description="Actions the assistant already performed: tool calls, info, promises.",
+    )
+    unresolved_questions: list[str] = Field(
+        default_factory=list,
+        description="Open items / pending questions not yet answered.",
+    )
+    key_facts: list[str] = Field(
+        default_factory=list,
+        description="Concrete facts surfaced: order numbers, amounts, SKUs, dates, tracking ids.",
+    )
+
+    def is_empty(self) -> bool:
+        return not (
+            self.current_topic
+            or self.events
+            or self.actions_taken
+            or self.unresolved_questions
+            or self.key_facts
+        )
+
+
 # ── Extractor output ─────────────────────────────────────────────────────────
 
 
 class ExtractionResult(BaseModel):
     """LLM-produced consolidation output.
 
-    Three buckets, written to three different stores:
+    Buckets, written to different stores / used for different purposes:
 
     - ``profile_updates``: partial :class:`UserProfile` fields the
       consolidator wants merged into ``agent.user_profile``. Empty dict
@@ -135,6 +183,8 @@ class ExtractionResult(BaseModel):
       uses these to keep context across the dropped tail.
     - ``event_memories``: sentences worth persisting beyond this
       session (Postgres event_memory + embedding). Survive 30 days.
+    - ``conversation_state``: structured this-session continuity summary
+      (mid-session compression only). ``None`` for session-end promotion.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -142,3 +192,4 @@ class ExtractionResult(BaseModel):
     profile_updates: dict[str, Any] = Field(default_factory=dict)
     working_memories: list[MemoryEntry] = Field(default_factory=list)
     event_memories: list[MemoryEntry] = Field(default_factory=list)
+    conversation_state: ConversationState | None = Field(default=None)

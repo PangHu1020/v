@@ -8,7 +8,7 @@
 - 长期记忆（session 总结 → user_profile + event_memory，向量召回 + 时间衰减）
 - RAG 检索层（`v/rag/retriever.py` → `agent.knowledge_chunk`，pgvector cosine）
 - 通用 subagent 工具（`context_mode` 参数控制共享 / 独立上下文）
-- Skill 加载器（markdown SOP，按客户意图匹配，自动注入 system prompt）
+- Skill 加载器（markdown SOP，冷层冻结 `<available_skills>` 目录 + `load_skill` 工具按需取回正文）
 - Phase-3 Group B：token 计数器 + metadata-first 降级阶梯
 - Phase-3 Group C：三层记忆架构 + 会话中段压缩
 - Phase-3 Group D：工具死循环检测 + 熔断（dead-loop guard + circuit breaker）
@@ -125,7 +125,7 @@ backend/
 
 ### 4.8 `SkillRegistry` ([backend/v/skills/registry.py](../backend/v/skills/registry.py))
 
-启动时从配置目录加载所有 markdown SOP。关键词子串匹配，top-K 渲染进 system prompt。
+启动时从配置目录加载所有 markdown SOP。采用 Anthropic 式**渐进式披露**：cold 层注入冻结的 `<available_skills>` 目录（`render_catalog`，仅技能名 + 描述），模型自选后调用 `load_skill(name)` 工具取回正文（`get` + 落到对话热区）。`match()` / `render_for_prompt()` 关键词预注入保留给遗留调用方。
 
 ### 4.9 `AppSettings` ([backend/v/configs/base.py](../backend/v/configs/base.py))
 

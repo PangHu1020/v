@@ -117,20 +117,28 @@ enter → compress → intent → agent → route_after_agent → ┬→ tools �
 
 ### 6.1 enter_node → intent_node → agent_node
 
+enter_node 按**冷热分层**注入 system prompt（提升 prefix 缓存命中率）：
+- **COLD** SystemMessage：persona + channel + 冻结的 `<available_skills>` 目录（仅技能名 + 描述）。与客户无关，跨会话可缓存。
+- **WARM** SystemMessage：user_profile + recent_events + session_memory。按客户区分，冻结到下次压缩。
+- 对话历史 append 在后，append-only。
+
+技能不再按关键词预注入正文——模型从目录自选，按需调用 `load_skill(name)` 工具取回正文（落到对话热区）。
+
 intent_node（flash LLM）分类意图 → agent_node（primary LLM）生成回复或工具调用。
 
 ### 6.2 工具分支
 
-`ToolNode([calculator, search, recall_memory, subagent])`：
+`ToolNode([calculator, search, recall_memory, subagent, load_skill])`：
 
 - `search(query)` → `KnowledgeRetriever.retrieve(pool, embedder, query)` → pgvector cosine over `agent.knowledge_chunk`
 - `recall_memory(query)` → pgvector cosine + 时间衰减 over `agent.event_memory`（per-customer）
 - `calculator(expr)` → 安全 AST 求值
 - `subagent(task)` → 单轮 LLM 子任务
+- `load_skill(name)` → 从 `<available_skills>` 目录取回该 SOP 正文（渐进式披露，正文 append 到对话）
 
 
 
-compression_node 还负责中段记忆提取：截断前用 LLM 提取 working_memories → Redis + event_memories → PG；不更新 user_profile（会话仍活跃）。
+compression_node 还负责中段记忆提取：一次 LLM 调用同时产出 conversation_state（结构化对话状态）+ working_memories → Redis + event_memories → PG；截断 head 后注入 `<compressed_history>` 渲染 conversation_state 实现无缝衔接；不更新 user_profile（会话仍活跃）。
 
 ### 6.3 reflection_node
 
