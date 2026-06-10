@@ -125,7 +125,7 @@ backend/
 
 ### 4.8 `SkillRegistry` ([backend/v/skills/registry.py](../backend/v/skills/registry.py))
 
-启动时从配置目录加载所有 markdown SOP。采用 Anthropic 式**渐进式披露**：cold 层注入冻结的 `<available_skills>` 目录（`render_catalog`，仅技能名 + 描述），模型自选后调用 `load_skill(name)` 工具取回正文（`get` + 落到对话热区）。`match()` / `render_for_prompt()` 关键词预注入保留给遗留调用方。
+启动时从配置目录加载所有 markdown SOP。采用 Anthropic 式**渐进式披露**：cold 层注入冻结的 `<available_skills>` 目录（`render_catalog`，仅技能名 + 描述），模型自选后调用 `load_skill(name)` 工具取回正文（`get` + 落到对话热区）。目录不做 top-K 截断——它是冻结的 cold 层，列全部技能才能让缓存前缀稳定。
 
 ### 4.9 `AppSettings` ([backend/v/configs/base.py](../backend/v/configs/base.py))
 

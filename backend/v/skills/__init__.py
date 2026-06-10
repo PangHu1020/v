@@ -1,10 +1,11 @@
-"""Skill loader (Phase-2 P4).
+"""Skill loader.
 
-Skills are reusable SOPs the agent can prepend to its system prompt
-when the customer's intent matches. Phase-2 P4 ships markdown-only,
-filesystem-only, with keyword-based matching. Phase-3 will add
-``SKILL.md`` + executable scripts (with sandboxing), community-registry
-sync, and embedding-based semantic match.
+Skills are reusable SOPs surfaced to the agent via Anthropic-style
+progressive disclosure: a frozen ``<available_skills>`` catalog (names +
+descriptions) sits in the cold system layer, and the model pulls a full body
+on demand with the ``load_skill`` tool. Markdown-only, filesystem-only for
+now; ``SKILL.md`` + executable scripts (with sandboxing), community-registry
+sync, and embedding-based selection are deferred.
 
 A skill file is a markdown document with YAML frontmatter::
 
@@ -20,10 +21,10 @@ A skill file is a markdown document with YAML frontmatter::
 
     1. 询问订单号 ...
 
-The frontmatter ``intents`` are case-insensitive substrings the loader
-matches against the customer's most recent message; the highest-scoring
-``max_skills_per_turn`` skills are inlined into the system prompt by
-``enter_node``.
+``description`` is what the catalog advertises; ``channels`` scopes which
+channels list the skill. ``intents`` is retained on the model for future
+ranking but no longer gates catalog membership — the catalog is uncapped so
+the cold-layer prefix stays cache-stable.
 """
 
 from backend.v.skills.loader import load_skills

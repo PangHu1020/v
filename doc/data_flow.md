@@ -118,8 +118,7 @@ handler 内部按顺序：
            "pg_pool": pool,            # recall_memory 工具用
            "embedder": embedder,
            "channel": ..., "channel_user_id": ...,
-           "skill_registry": ...,      # enter_node 用
-           "skill_top_k": 3,
+           "skill_registry": ...,      # enter_node 的 cold 层目录 + load_skill 工具用
        }
    }
 5. final_state = await graph.ainvoke(input_state, config=config)

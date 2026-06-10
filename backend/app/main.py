@@ -101,7 +101,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings=settings,
         embedder=embedder,
         skill_registry=skill_registry,
-        skill_top_k=settings.skill.max_skills_per_turn,
         recent_events_to_inject=settings.memory.recent_events_to_inject,
         compression_threshold_tokens=settings.memory.compression_threshold_tokens,
         compression_keep_recent_messages=settings.memory.compression_keep_recent_messages,

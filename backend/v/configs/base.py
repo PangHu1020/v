@@ -280,11 +280,12 @@ class WecomAibotSettings(_YamlSettings):
 
 
 class SkillSettings(_YamlSettings):
-    """Skill loader settings (Phase-2 P4).
+    """Skill loader settings.
 
-    Skills are markdown SOPs the agent can prepend to its system prompt
-    based on the customer's intent. Phase-2 P4 ships markdown-only;
-    SKILL.md+exec and community-registry sources are Phase-3.
+    Skills are markdown SOPs surfaced to the agent via a frozen
+    ``<available_skills>`` catalog (cold layer) + the ``load_skill`` tool
+    (progressive disclosure). Markdown-only for now; SKILL.md+exec and
+    community-registry sources are deferred.
     """
 
     model_config = SettingsConfigDict(**_COMMON, env_prefix="SKILL_")
@@ -292,9 +293,6 @@ class SkillSettings(_YamlSettings):
     internal_repo_path: str = ""
     """Filesystem path to the directory holding markdown skills. Empty
     disables the loader."""
-
-    max_skills_per_turn: int = Field(default=3, ge=0, le=20)
-    """Top-K skills to inject per matched turn. 0 disables injection."""
 
 
 class MilvusSettings(_YamlSettings):

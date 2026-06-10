@@ -153,11 +153,11 @@ MCP 层已整体删除。此条目不适用。
 - 信任边界：仓库内 + whitelist 列表 → 可执行；其他默认 markdown-only
 - 社区 registry sync（git pull）
 
-### 1.17 Skill 匹配是关键词子串，召回粗糙
+### 1.17 Skill 目录无排序/筛选，全量进 cold 层
 
-[backend/v/skills/registry.py:_score](../backend/v/skills/registry.py) 用大小写不敏感子串匹配 + 命中数排序。"我想退掉这个东西"这种没有"退款"二字的句子匹配不到 refund_sop。
+[backend/v/skills/registry.py](../backend/v/skills/registry.py) 的 `render_catalog` 把某 channel 下**所有** skill 的 name + description 全列进 cold 层 `<available_skills>` 目录，由模型自主选择并 `load_skill` 取正文。这避免了旧关键词子串匹配的召回问题（"我想退掉这个东西"现在靠模型语义判断，不再漏召），但 skill 数量很多时目录会膨胀，挤占缓存前缀。
 
-**建议**：用 embedder 给每个 skill 的 description / intents 离线生成向量，启动时加载到内存；查询时 embed customer query + cosine 重排。和 [recall_memory](../backend/v/tools/recall_memory.py) 复用同一份 Qwen embedder。
+**建议**：skill 数量超阈值时，用 embedder 给每个 skill 的 description 离线生成向量，按与近期对话的 cosine 相似度选 top-N 进目录（仍冻结到压缩点以保持缓存友好）。和 [recall_memory](../backend/v/tools/recall_memory.py) 复用同一份 Qwen embedder。
 
 ---
 
