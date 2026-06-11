@@ -17,13 +17,13 @@ consolidation flow with vectors already computed.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import asyncpg
 from langchain_core.embeddings import Embeddings
 
-from backend.v.memory.types import MemoryEntry
+from backend.v.memory.types import MemoryCandidate, MemoryEntry
 
 DEFAULT_EVENT_TTL_DAYS = 30
 
@@ -71,6 +71,59 @@ async def insert_event_memories(
                     vec,
                     entry.created_at,
                     str(ttl_days),
+                )
+                inserted += 1
+    return inserted
+
+
+async def insert_episodic_candidates(
+    pool: asyncpg.Pool,
+    *,
+    channel: str,
+    channel_user_id: str,
+    session_id: str | None,
+    candidates: list[MemoryCandidate],
+    vectors: list[list[float]],
+) -> int:
+    """Append episodic candidates as ``tier='raw'`` rows (memory V2 write path).
+
+    Unlike :func:`insert_event_memories`, this writes the V2 provenance columns
+    (``subject``/``source``/``confidence``/``period``) and leaves ``expires_at``
+    NULL — episodic forgetting is driven by monthly consolidation, not TTL.
+    ``period`` is derived from each candidate's created-at month (``YYYY-MM``).
+
+    Vectors are precomputed by the caller (the policy gate embeds once and
+    reuses for both dedup and insert). Returns the count inserted.
+    """
+    if not candidates:
+        return 0
+    inserted = 0
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            for cand, vec in zip(candidates, vectors, strict=True):
+                now = datetime.now(UTC)
+                period = now.strftime("%Y-%m")
+                await conn.execute(
+                    """
+                    INSERT INTO agent.event_memory
+                        (channel, channel_user_id, session_id, content, kind,
+                         importance, keywords, embedding, created_at,
+                         subject, source, confidence, tier, period)
+                    VALUES ($1, $2, $3, $4, 'event', $5, $6, $7, $8::timestamptz,
+                            $9, $10, $11, 'raw', $12)
+                    """,
+                    channel,
+                    channel_user_id,
+                    session_id,
+                    cand.content,
+                    float(cand.importance),
+                    cand.keywords,
+                    vec,
+                    now,
+                    cand.subject,
+                    cand.source,
+                    float(cand.confidence),
+                    period,
                 )
                 inserted += 1
     return inserted
