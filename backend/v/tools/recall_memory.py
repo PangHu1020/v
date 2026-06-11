@@ -107,7 +107,9 @@ async def _recall(
         ids = [r["id"] for r in rows]
         async with pool.acquire() as conn:
             await conn.execute(
-                "UPDATE agent.event_memory SET last_accessed_at = now() WHERE id = ANY($1::uuid[])",
+                "UPDATE agent.event_memory "
+                "SET last_accessed_at = now(), access_count = access_count + 1 "
+                "WHERE id = ANY($1::uuid[])",
                 ids,
             )
 

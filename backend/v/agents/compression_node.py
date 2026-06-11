@@ -1,11 +1,17 @@
-"""Mid-session compression node (Phase-3 Group H).
+"""Mid-session compression node (memory V2).
 
-When token threshold fires:
-1. LLM extracts working_memories + event_memories from the about-to-be-dropped
-   history. Both are written to their stores. profile_updates is deferred to
-   session-end (session still active — no profile changes mid-conversation).
-2. Message history is trimmed; compressed marker injected with the freshly
-   written working-memory block so the next turn still sees the summary.
+When the token threshold fires:
+1. One LLM call extracts a structured ``ConversationState`` (for seamless
+   continuation) plus working/event sentences from the about-to-be-dropped
+   history.
+2. Those sentences are folded into the session's **Redis working memory** only.
+   No Postgres write happens here — under memory V2 every durable write is
+   centralised at session-end (``promote_to_long_term``), which reads working
+   memory as its input. Keeping mid-session purely Redis-local means the hot
+   path never blocks on PG and there is exactly one durable-write site.
+3. The message history is trimmed; a ``<compressed_history>`` marker carrying
+   the conversation state + current working memory is injected so the next turn
+   continues seamlessly.
 """
 
 from __future__ import annotations
@@ -32,7 +38,7 @@ async def compression_node(
     state: CustomerServiceState,
     config: RunnableConfig | None = None,
 ) -> dict[str, Any]:
-    """Extract memories from dropped history, then trim the message list."""
+    """Extract memories into Redis working memory, then trim the message list."""
     cfg = config.get("configurable", {}) if config else {}
     threshold: int = int(cfg.get("compression_threshold_tokens", 0))
     if threshold <= 0:
@@ -48,10 +54,8 @@ async def compression_node(
         return {}
 
     session_id: str = state.get("session_id") or cfg.get("thread_id") or ""
-    pool = cfg.get("pg_pool")
     redis = cfg.get("redis")
     llm_caller = cfg.get("llm_caller")
-    embedder = cfg.get("embedder")
 
     head = messages[:-keep_recent]
     tail = messages[-keep_recent:]
@@ -80,8 +84,11 @@ async def compression_node(
             except Exception as exc:
                 _log.error("agents.compression.extract_failed", error=type(exc).__name__)
 
-    # --- 2. Write working_memories to Redis ---
-    if session_id and redis and extracted.working_memories:
+    # --- 2. Fold extracted sentences into Redis working memory (no PG write) ---
+    # Both working- and event-kind sentences go to Redis; session-end
+    # consolidation reads working memory and routes them to the durable tiers.
+    folded = [*extracted.working_memories, *extracted.event_memories]
+    if session_id and redis and folded:
         try:
             from backend.v.memory.working import append_working_memory
 
@@ -89,31 +96,13 @@ async def compression_node(
             await append_working_memory(
                 redis,
                 session_id=session_id,
-                entries=extracted.working_memories,
+                entries=folded,
                 ttl_seconds=ttl,
             )
         except Exception as exc:
             _log.error("agents.compression.working_write_failed", error=type(exc).__name__)
 
-    # --- 3. Write event_memories to Postgres ---
-    if pool and embedder and session_id and extracted.event_memories:
-        try:
-            from backend.v.memory.event_memory import insert_event_memories
-
-            identity = state.get("channel"), state.get("channel_user_id")
-            if all(identity):
-                await insert_event_memories(
-                    pool,
-                    channel=identity[0],
-                    channel_user_id=identity[1],
-                    session_id=session_id,
-                    entries=extracted.event_memories,
-                    embedder=embedder,
-                )
-        except Exception as exc:
-            _log.error("agents.compression.event_write_failed", error=type(exc).__name__)
-
-    # --- 4. Trim messages, inject compressed marker ---
+    # --- 3. Trim messages, inject compressed marker ---
     from backend.v.memory.working import read_working_memory
 
     working_entries = []
@@ -136,8 +125,7 @@ async def compression_node(
         "agents.compression.applied",
         messages_before=len(messages),
         kept_recent=keep_recent,
-        working_written=len(extracted.working_memories),
-        events_written=len(extracted.event_memories),
+        folded_to_working=len(folded),
         has_state=extracted.conversation_state is not None,
     )
     return {"messages": [*removals, compressed, *tail]}

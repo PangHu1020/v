@@ -232,6 +232,27 @@ class MemorySettings(_YamlSettings):
     """Removed emotion preemption — kept field so existing .env files don't error.
     Set to 1.0 to disable (always false). Scheduled for removal."""
 
+    # ── Memory V2: session-end policy gate ────────────────────────────────
+    consolidation_importance_floor: float = Field(default=0.3, ge=0.0, le=1.0)
+    """Drop extracted candidates below this importance before any write."""
+    consolidation_dedup_similarity_floor: float = Field(default=0.92, ge=0.0, le=1.0)
+    """Episodic candidate is a duplicate (dropped) if its cosine to an existing
+    same-subject row is at or above this."""
+
+    # ── Memory V2: ACT-R activation weights (episodic recall + consolidation) ──
+    activation_w_importance: float = Field(default=1.0, ge=0.0)
+    activation_w_access: float = Field(default=0.5, ge=0.0)
+    """Reinforcement weight on ln(1+access_count) — the "use-it" term."""
+    activation_w_age: float = Field(default=0.3, ge=0.0)
+    """Decay weight on ln(1+age_days) — the "lose-it" term."""
+
+    # ── Memory V2: monthly consolidation (forgetting) ─────────────────────
+    consolidation_survival_threshold: float = Field(default=0.5)
+    """After a cluster is summarised, raws with activation below this are
+    deleted; survivors are linked to the summary and kept recallable."""
+    consolidation_min_cluster_size: int = Field(default=2, ge=1)
+    """Don't summarise a (subject, month) cluster smaller than this."""
+
 
 class BusSettings(_YamlSettings):
     """Redis Streams bus configuration."""

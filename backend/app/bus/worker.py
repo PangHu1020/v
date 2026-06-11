@@ -110,6 +110,7 @@ async def _promote_prev_session(
     llm_caller: Any,
     embedder: Any,
     checkpointer: Any = None,
+    settings: Any = None,
 ) -> None:
     """Fire-and-forget: consolidate an expired session into long-term memory.
 
@@ -139,6 +140,7 @@ async def _promote_prev_session(
             "llm_caller": llm_caller,
             "embedder": embedder,
             "fallback_messages": fallback_messages,
+            "settings": settings,
         }
         result = await promote_to_long_term(ctx, session_id=session_id)
         _log.info("bus.worker.session_end_promoted", session_id=session_id, result=result)
@@ -229,6 +231,7 @@ def make_bus_handler(
                             redis=redis,
                             llm_caller=llm_caller,
                             embedder=embedder,
+                            settings=settings,
                         )
                     )
                 # Returning customer — lazily consolidate their closed-month

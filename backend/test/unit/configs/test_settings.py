@@ -94,6 +94,23 @@ class TestMemorySettings:
         settings = _no_env_file(MemorySettings)
         assert settings.working_ttl_seconds == 1800
 
+    def test_v2_defaults(self) -> None:
+        s = _no_env_file(MemorySettings)
+        assert s.consolidation_importance_floor == 0.3
+        assert s.consolidation_dedup_similarity_floor == 0.92
+        assert s.activation_w_importance == 1.0
+        assert s.activation_w_access == 0.5
+        assert s.activation_w_age == 0.3
+        assert s.consolidation_survival_threshold == 0.5
+        assert s.consolidation_min_cluster_size == 2
+
+    def test_v2_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MEMORY_CONSOLIDATION_SURVIVAL_THRESHOLD", "0.7")
+        monkeypatch.setenv("MEMORY_ACTIVATION_W_ACCESS", "0.9")
+        s = _no_env_file(MemorySettings)
+        assert s.consolidation_survival_threshold == 0.7
+        assert s.activation_w_access == 0.9
+
 
 class TestChannelSettings:
     def test_wecom_prefix(self, monkeypatch: pytest.MonkeyPatch) -> None:

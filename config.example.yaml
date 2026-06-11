@@ -30,6 +30,16 @@ memory:
   recent_events_to_inject: 3           # event rows injected at session start
   compression_threshold_tokens: 4000   # mid-session compression trigger
   compression_keep_recent_messages: 4  # trailing turns kept verbatim on compression
+  # Memory V2 — session-end policy gate
+  consolidation_importance_floor: 0.3        # drop candidates below this before write
+  consolidation_dedup_similarity_floor: 0.92 # episodic dup if cosine ≥ this (same subject)
+  # Memory V2 — ACT-R activation (episodic recall rank + consolidation eligibility)
+  activation_w_importance: 1.0
+  activation_w_access: 0.5             # "use-it": ln(1+access_count) reinforcement
+  activation_w_age: 0.3                # "lose-it": ln(1+age_days) decay
+  # Memory V2 — monthly consolidation (forgetting)
+  consolidation_survival_threshold: 0.5      # raws below this activation pruned post-summary
+  consolidation_min_cluster_size: 2          # skip summarising clusters smaller than this
 
 bus:
   stream_prefix: bus

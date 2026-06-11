@@ -124,7 +124,7 @@ class TestCompressionApplies:
         assert len(systems) == 1
         assert "<compressed_history>" in systems[0].content
 
-    async def test_writes_working_and_event_memories(self, monkeypatch) -> None:
+    async def test_folds_memories_into_working_no_pg_write(self, monkeypatch) -> None:
         history = _long_history(8)
         working = [MemoryEntry(content="本次偏好顺丰", importance=0.6, kind="preference")]
         events = [MemoryEntry(content="投诉 SO123 延误", importance=0.5, kind="event")]
@@ -141,7 +141,7 @@ class TestCompressionApplies:
 
         append_mock = AsyncMock()
         insert_mock = AsyncMock()
-        read_mock = AsyncMock(return_value=working)
+        read_mock = AsyncMock(return_value=[*working, *events])
         monkeypatch.setattr("backend.v.memory.working.append_working_memory", append_mock)
         monkeypatch.setattr("backend.v.memory.working.read_working_memory", read_mock)
         monkeypatch.setattr("backend.v.memory.event_memory.insert_event_memories", insert_mock)
@@ -159,13 +159,15 @@ class TestCompressionApplies:
                     "compression_keep_recent_messages": 4,
                     "llm_caller": caller,
                     "redis": object(),
-                    "pg_pool": object(),
-                    "embedder": object(),
                 }
             },
         )
+        # V2: both working- and event-kind sentences fold into Redis in one
+        # append; NO mid-session PG write (durable writes are session-end only).
         append_mock.assert_awaited_once()
-        insert_mock.assert_awaited_once()
+        folded = append_mock.await_args.kwargs["entries"]
+        assert len(folded) == 2  # working + event sentences combined
+        insert_mock.assert_not_awaited()
         # The re-read working memory is rendered into the compressed marker.
         systems = [m for m in out["messages"] if isinstance(m, SystemMessage)]
         assert "本次偏好顺丰" in systems[0].content

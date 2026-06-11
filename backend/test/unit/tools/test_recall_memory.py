@@ -183,6 +183,61 @@ class TestRecallMemoryToolConfig:
         assert "agent.memory_episodes" not in select_sql
         assert "0.5 + 0.5 * importance" in select_sql
 
+    async def test_recall_bumps_access_count(self) -> None:
+        # When rows come back, the touch UPDATE reinforces them: access_count+1
+        # (the "use-it" half of ACT-R activation) alongside last_accessed_at.
+        pool = MagicMock()
+        recorded: list[tuple[str, tuple]] = []
+
+        from contextlib import asynccontextmanager
+
+        row = {
+            "id": "00000000-0000-0000-0000-000000000001",
+            "content": "投诉物流",
+            "kind": "event",
+            "importance": 0.5,
+            "keywords": [],
+            "age_days": 2.0,
+            "similarity": 0.9,
+            "weighted_score": 0.8,
+        }
+
+        @asynccontextmanager
+        async def _acquire():
+            conn = MagicMock()
+
+            async def _fetch(sql, *args):
+                recorded.append((sql, args))
+                return [row]
+
+            async def _execute(sql, *args):
+                recorded.append((sql, args))
+                return "OK"
+
+            conn.fetch = _fetch
+            conn.execute = _execute
+            yield conn
+
+        pool.acquire = _acquire
+
+        embedder = MagicMock()
+        embedder.aembed_query = AsyncMock(return_value=[0.0] * 1024)
+
+        await recall_memory.ainvoke(
+            {"query": "物流"},
+            config={
+                "configurable": {
+                    "pg_pool": pool,
+                    "embedder": embedder,
+                    "channel": "wecom",
+                    "channel_user_id": "ext-1",
+                }
+            },
+        )
+        update_sql = next(s for s, _ in recorded if s.strip().startswith("UPDATE"))
+        assert "access_count = access_count + 1" in update_sql
+        assert "last_accessed_at = now()" in update_sql
+
 
 class TestDefaults:
     def test_default_top_k(self) -> None:
