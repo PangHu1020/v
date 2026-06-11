@@ -150,6 +150,41 @@ async def _promote_prev_session(
         )
 
 
+async def _consolidate_user_memory(
+    *,
+    channel: str,
+    channel_user_id: str,
+    pool: asyncpg.Pool,
+    llm_caller: Any,
+    embedder: Any,
+    settings: Any = None,
+) -> None:
+    """Fire-and-forget: lazily consolidate a returning customer's old episodes.
+
+    Triggered when the customer starts a new session. Bounds episodic-memory
+    growth by summarising closed-month per-subject clusters and pruning
+    low-activation raws (see ``backend.v.memory.consolidation``).
+    """
+    try:
+        from backend.v.memory.consolidation import consolidate_user
+
+        ctx = {
+            "pool": pool,
+            "llm_caller": llm_caller,
+            "embedder": embedder,
+            "settings": settings,
+        }
+        result = await consolidate_user(ctx, channel=channel, channel_user_id=channel_user_id)
+        if result:
+            _log.info("bus.worker.consolidated", channel=channel, result=result)
+    except Exception as exc:
+        _log.error(
+            "bus.worker.consolidate_failed",
+            channel=channel,
+            error=type(exc).__name__,
+        )
+
+
 def make_bus_handler(
     *,
     graph: Any,
@@ -194,6 +229,19 @@ def make_bus_handler(
                             redis=redis,
                             llm_caller=llm_caller,
                             embedder=embedder,
+                        )
+                    )
+                # Returning customer — lazily consolidate their closed-month
+                # episodic memory (fire-and-forget; bounds episodic growth).
+                if llm_caller and embedder:
+                    asyncio.create_task(  # noqa: RUF006  fire-and-forget by design
+                        _consolidate_user_memory(
+                            channel=msg.channel,
+                            channel_user_id=msg.channel_user_id,
+                            pool=pool,
+                            llm_caller=llm_caller,
+                            embedder=embedder,
+                            settings=settings,
                         )
                     )
             with bind_request(session_id=session_id):

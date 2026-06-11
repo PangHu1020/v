@@ -264,3 +264,26 @@ def render_conversation_state(state: ConversationState) -> str:
 # Phase-2's MEMORY_EXTRACTOR_SYSTEM_PROMPT was the same role; alias
 # preserves any straggling import.
 MEMORY_EXTRACTOR_SYSTEM_PROMPT = LONG_TERM_PROMOTION_SYSTEM_PROMPT
+
+
+# ── Monthly consolidation (raw episodic cluster → one summary) ────────────────
+
+CONSOLIDATION_SUMMARY_SYSTEM_PROMPT = """<role>
+你是一名记忆归并员。把同一主题、同一月份的若干条情节记忆，\
+压缩成一条信息无损的月度摘要，供长期低成本召回。
+</role>
+
+<task>
+读取 <episodes>（同一 subject、同一月份的原始情节记忆列表），\
+输出一条 JSON：{"summary": "...", "importance": 0-1}。
+summary 用一句到三句中文概括这批事件，保留关键具体值\
+（订单号、金额、SKU、日期、投诉/诉求要点），丢弃口水与重复。
+importance 取这批里最高的那条（关键事件不能在归并后被降权）。
+</task>
+
+<rules>
+- 不要编造 episodes 里没有的事实；具体值必须来自原文。
+- 若这批事件指向同一件事的多次往复，concise 成一条主线，\
+但保留"反复出现"这一信号（如"就 SO123 多次催促物流"）。
+- 仅输出 JSON，键名：summary、importance。
+</rules>"""
