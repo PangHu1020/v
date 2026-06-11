@@ -31,7 +31,25 @@ from pydantic import BaseModel, ConfigDict, Field
 # discussion. ``preference`` and ``observation`` typically live in the
 # working tier (immediate session); ``event`` typically lives in the
 # event tier. The extractor decides per entry.
+#
+# NOTE (memory V2): this flat kind is the *legacy* shape. V2 splits memory
+# into a semantic tier (:class:`UserMemory`, overwritable attributes) and an
+# episodic tier (events). New extraction produces :class:`MemoryExtraction`
+# (candidate lists); ``MemoryEntry`` + ``ExtractionResult`` are retained until
+# the write pipeline (stage 3) migrates every consumer.
 MemoryKind = Literal["preference", "observation", "event"]
+
+# ── Memory V2 shared enums ────────────────────────────────────────────────────
+
+# Semantic-tier attribute classes. ``preference`` = soft taste (顺丰/简洁回复);
+# ``constraint`` = hard rule the agent must honour (过敏、不要电话联系);
+# ``pattern`` = recurring behaviour (每月初下单、常退货).
+UserMemoryKind = Literal["preference", "constraint", "pattern"]
+
+# Provenance. ``stated`` = the customer said it outright; ``inferred`` = the
+# model deduced it. Drives conflict arbitration (stated beats inferred) and
+# whether the agent may repeat the fact back to the customer as established.
+MemorySource = Literal["stated", "inferred"]
 
 
 class MemoryEntry(BaseModel):
@@ -117,6 +135,93 @@ class UserProfile(BaseModel):
         max_length=200,
         description="Free-form supplementary text (≤200 chars).",
     )
+
+
+# ── Memory V2: semantic tier (user_memory) ────────────────────────────────────
+
+
+class UserMemory(BaseModel):
+    """One bi-temporal row of the semantic tier (``agent.user_memory``).
+
+    A customer attribute with a single *current truth* per ``attr_key`` and an
+    append-only supersession chain for audit. Overwriting closes the old row
+    (``status='superseded'``, ``valid_to=now``, ``superseded_by``) and inserts a
+    fresh active row — old rows are never deleted. No embedding: semantic memory
+    is small, stable, and injected whole at session start.
+
+    This mirrors the ``agent.user_memory`` schema (080_memory_v2.sql). It is the
+    persisted/queried shape; the extractor emits :class:`MemoryCandidate`, which
+    the write pipeline resolves into these rows.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    attr_key: str = Field(
+        min_length=1,
+        description='Conflict key, e.g. "preferred_courier" / "allergy" / "member_level".',
+    )
+    attr_value: Any = Field(description="Scalar or list value. JSONB-encoded at the storage layer.")
+    kind: UserMemoryKind = Field(description="preference | constraint | pattern.")
+    source: MemorySource = Field(default="inferred")
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    status: Literal["active", "superseded"] = Field(default="active")
+    valid_from: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    valid_to: datetime | None = Field(
+        default=None, description="NULL while current; set to now() when superseded."
+    )
+    last_confirmed_at: datetime | None = Field(
+        default=None,
+        description="When the customer last reaffirmed this value (staleness flag input).",
+    )
+
+
+# ── Memory V2: extraction candidates (pre-write intermediate) ─────────────────
+
+
+class MemoryCandidate(BaseModel):
+    """A single fact the extractor proposes, before the policy gate / merge.
+
+    Tier-agnostic: ``content`` is the human-readable fact; the routing into the
+    semantic vs episodic store is decided by which list it lands in on
+    :class:`MemoryExtraction`. Carries provenance so the write pipeline can
+    arbitrate conflicts (semantic) and weight recall (episodic).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(min_length=1, description="Self-contained Chinese sentence.")
+    importance: float = Field(ge=0.0, le=1.0)
+    source: MemorySource = Field(default="inferred")
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    keywords: list[str] = Field(default_factory=list)
+    # Semantic candidates set ``attr_key``/``attr_value`` so the pipeline can
+    # key the upsert; episodic candidates leave them None and may set ``subject``.
+    attr_key: str | None = Field(
+        default=None, description="Semantic only: the conflict key to upsert under."
+    )
+    attr_value: Any = Field(default=None, description="Semantic only: the value for attr_key.")
+    kind: UserMemoryKind | None = Field(
+        default=None, description="Semantic only: preference | constraint | pattern."
+    )
+    subject: str | None = Field(
+        default=None,
+        description="Episodic only: entity/topic anchor (order id, SKU, topic) for clustering.",
+    )
+
+
+class MemoryExtraction(BaseModel):
+    """The V2 extractor output: candidates split by tier.
+
+    Replaces the role :class:`ExtractionResult` played at session-end. The write
+    pipeline (stage 3) routes ``user_candidates`` into ``agent.user_memory``
+    (bi-temporal upsert) and ``episodic_candidates`` into ``agent.event_memory``
+    (append-only). ``ConversationState`` stays separate (mid-session continuity).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_candidates: list[MemoryCandidate] = Field(default_factory=list)
+    episodic_candidates: list[MemoryCandidate] = Field(default_factory=list)
 
 
 # ── Conversation-state summary (mid-session compression) ──────────────────────
