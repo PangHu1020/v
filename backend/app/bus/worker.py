@@ -111,52 +111,35 @@ async def _promote_prev_session(
     embedder: Any,
     checkpointer: Any = None,
 ) -> None:
-    """Fire-and-forget: consolidate expired session into long-term memory.
+    """Fire-and-forget: consolidate an expired session into long-term memory.
 
-    Two paths:
-    - Working memory exists → promote directly (no extra LLM call; mid-session
-      compression already extracted and wrote working+event entries).
-    - Working memory empty (short session, threshold never fired) → extract
-      from message history then promote.
+    A single ``promote_to_long_term`` call handles both paths via one LLM
+    extraction:
+    - Working memory exists (mid-session compression ran) → it is the input.
+    - Working memory empty (short session) → the checkpoint transcript is
+      passed as ``fallback_messages`` and used as the input instead.
     """
     try:
-        from backend.v.memory.memory_extractor import (
-            extract_from_messages,
-            promote_to_long_term,
-        )
-        from backend.v.memory.working import (
-            append_working_memory,
-            read_working_memory,
-        )
+        from backend.v.memory.memory_extractor import promote_to_long_term
 
-        ctx = {"pool": pool, "redis": redis, "llm_caller": llm_caller, "embedder": embedder}
-        working = await read_working_memory(redis, session_id=session_id)
-
-        if not working and checkpointer:
-            # Short session — extract from checkpoint history.
+        fallback_messages: list[Any] = []
+        if checkpointer:
             try:
                 ckpt = await checkpointer.aget_tuple({"configurable": {"thread_id": session_id}})
-                msgs = ckpt.checkpoint.get("channel_values", {}).get("messages", []) if ckpt else []
+                if ckpt:
+                    fallback_messages = ckpt.checkpoint.get("channel_values", {}).get(
+                        "messages", []
+                    )
             except Exception:
-                msgs = []
-            if msgs:
-                extracted = await extract_from_messages(msgs, llm_caller=llm_caller)
-                if extracted.working_memories:
-                    await append_working_memory(
-                        redis,
-                        session_id=session_id,
-                        entries=extracted.working_memories,
-                        ttl_seconds=300,  # short TTL — just long enough for promote_to_long_term
-                    )
-                if extracted.event_memories:
-                    # Stash as working entries so promote_to_long_term sees them
-                    await append_working_memory(
-                        redis,
-                        session_id=session_id,
-                        entries=extracted.event_memories,
-                        ttl_seconds=300,
-                    )
+                fallback_messages = []
 
+        ctx = {
+            "pool": pool,
+            "redis": redis,
+            "llm_caller": llm_caller,
+            "embedder": embedder,
+            "fallback_messages": fallback_messages,
+        }
         result = await promote_to_long_term(ctx, session_id=session_id)
         _log.info("bus.worker.session_end_promoted", session_id=session_id, result=result)
     except Exception as exc:

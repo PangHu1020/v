@@ -32,9 +32,16 @@ from backend.v.memory.prompts import (
 )
 from backend.v.memory.types import (
     ExtractionResult,
+    MemoryCandidate,
     MemoryEntry,
+    MemoryExtraction,
     MemoryKind,
+    UserMemory,
     UserProfile,
+)
+from backend.v.memory.user_memory import (
+    rebuild_profile_cache,
+    upsert_user_memory,
 )
 from backend.v.memory.working import (
     append_working_memory,
@@ -46,8 +53,11 @@ from backend.v.memory.working import (
 
 __all__ = [
     "ExtractionResult",
+    "MemoryCandidate",
     "MemoryEntry",
+    "MemoryExtraction",
     "MemoryKind",
+    "UserMemory",
     "UserProfile",
     "append_working_memory",
     "cache_user_profile",
@@ -58,6 +68,8 @@ __all__ = [
     "read_recent_event_memories",
     "read_user_profile",
     "read_working_memory",
+    "rebuild_profile_cache",
     "render_recent_events_for_prompt",
     "render_session_memory_for_prompt",
+    "upsert_user_memory",
 ]

@@ -1,25 +1,24 @@
-"""Long-term memory promotion (Phase-3 reshape).
+"""Session-end memory consolidation: working memory / transcript → durable stores.
 
-Triggered at session end. Reads the active session's working memory +
-the existing user_profile, asks the LLM to:
+Triggered fire-and-forget when a session expires. Runs ONE LLM extraction over
+the session's distilled signal and routes the result into the two durable tiers:
 
-1. Decide which entries from working memory have **stable, long-term
-   value** about THIS customer (preferred courier, allergy, preferred
-   salutation) — those become a partial :class:`UserProfile` patch
-   merged into ``agent.user_profile``.
-2. Decide which entries (or new sentences synthesized from the
-   transcript) deserve a **30-day persistent footprint** in
-   ``agent.event_memory`` for cross-session recall.
+- **user_candidates** → ``agent.user_memory`` via the bi-temporal upsert
+  (:mod:`backend.v.memory.user_memory`), then the ``user_profile`` JSONB cache
+  is rebuilt from the active rows.
+- **episodic_candidates** → ``agent.event_memory`` as ``tier='raw'`` rows,
+  after the policy gate masks PII, drops trivia, and de-duplicates against
+  existing same-subject events.
 
-What this module is NOT responsible for:
+The single-call design is deliberate: an earlier version extracted twice (once
+to populate working memory, once to promote), burning tokens. Here the input is
+whichever distilled signal exists — the session's working memory if mid-session
+compression produced any, otherwise the raw transcript for a short session —
+and exactly one extraction call fans out to both stores.
 
-- Mid-session compression — owned by ``compression_node``.
-- Per-turn working-memory writes — owned by the consolidator
-  (``consolidate_session``) which calls in here at session end only.
-
-The result is :class:`backend.v.memory.types.ExtractionResult`:
-``profile_updates`` + ``event_memories``. Working memory is dropped on
-success because the long-term footprint has already been computed.
+What this module is NOT responsible for: mid-session compression (owned by
+``compression_node``) and monthly consolidation/forgetting (owned by
+``backend.v.memory.consolidation``).
 """
 
 from __future__ import annotations
@@ -29,44 +28,26 @@ from typing import Any
 
 import asyncpg
 from langchain_core.embeddings import Embeddings
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
-from backend.v.memory.event_memory import insert_event_memories
-from backend.v.memory.prompts import (
-    LONG_TERM_PROMOTION_SYSTEM_PROMPT,
-    MID_SESSION_EXTRACTION_SYSTEM_PROMPT,
+from backend.v.memory.event_memory import insert_episodic_candidates
+from backend.v.memory.policy_gate import apply_importance_floor, apply_pii_mask, dedup_episodic
+from backend.v.memory.prompts import SESSION_END_EXTRACTION_SYSTEM_PROMPT
+from backend.v.memory.types import MemoryEntry, MemoryExtraction
+from backend.v.memory.user_memory import (
+    read_active_user_memory,
+    rebuild_profile_cache,
+    upsert_user_memory,
 )
-from backend.v.memory.types import ExtractionResult, MemoryEntry, UserProfile
-from backend.v.memory.working import (
-    delete_working_memory,
-    read_working_memory,
-)
+from backend.v.memory.working import delete_working_memory, read_working_memory
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.utils.logging import bind_request, get_logger
 
-_log = get_logger("memory.long_term_promotion")
+_log = get_logger("memory.session_end")
 
-
-def _build_prompt(
-    existing_profile: dict[str, Any],
-    working_entries: list[MemoryEntry],
-) -> list[BaseMessage]:
-    """Assemble the SystemMessage + HumanMessage for the LLM extractor."""
-    profile_json = json.dumps(existing_profile, ensure_ascii=False, indent=2)
-    working_json = json.dumps(
-        [e.model_dump(mode="json") for e in working_entries],
-        ensure_ascii=False,
-        indent=2,
-    )
-    return [
-        SystemMessage(content=LONG_TERM_PROMOTION_SYSTEM_PROMPT),
-        HumanMessage(
-            content=(
-                f"<existing_profile>\n{profile_json}\n</existing_profile>\n\n"
-                f"<working_memory>\n{working_json}\n</working_memory>"
-            )
-        ),
-    ]
+# Policy-gate defaults; stage 7 plumbs these from MemorySettings via ctx.
+DEFAULT_IMPORTANCE_FLOOR = 0.3
+DEFAULT_DEDUP_SIMILARITY_FLOOR = 0.92
 
 
 async def _read_session_identity(
@@ -83,82 +64,41 @@ async def _read_session_identity(
     return row["channel"], row["channel_user_id"]
 
 
-async def _read_existing_profile(
-    pool: asyncpg.Pool,
-    *,
-    channel: str,
-    channel_user_id: str,
-) -> dict[str, Any]:
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT profile FROM agent.user_profile WHERE channel = $1 AND channel_user_id = $2",
-            channel,
-            channel_user_id,
-        )
-    if row is None or row["profile"] is None:
-        return {}
-    return dict(row["profile"])
+def _render_working(entries: list[MemoryEntry]) -> str:
+    """Render distilled working-memory entries as the extraction input."""
+    return "\n".join(f"- [{e.kind}] {e.content}" for e in entries)
 
 
-def _merge_profile(existing: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
-    """Merge ``updates`` into ``existing`` with shallow + ``extras`` deep-merge.
-
-    The model returns a partial ``UserProfile`` shape. We drop unknown
-    top-level keys (they go in ``extras`` instead) but keep the
-    customer's existing fields when ``updates`` doesn't mention them.
-    """
-    canonical_keys = set(UserProfile.model_fields) - {"extras", "notes"}
-    merged = dict(existing)
-
-    for key, value in updates.items():
-        if key in canonical_keys:
-            # Recency wins: an explicit update overwrites; an explicit
-            # ``None`` clears.
-            merged[key] = value
-        elif key == "extras" and isinstance(value, dict):
-            existing_extras = dict(merged.get("extras") or {})
-            for k, v in value.items():
-                existing_extras[k] = v
-            merged["extras"] = existing_extras
-        elif key == "notes":
-            merged["notes"] = value
-        else:
-            # Unknown top-level key from the LLM → stash in extras so we
-            # don't drop information; preserves the "open extension" idea.
-            extras = dict(merged.get("extras") or {})
-            extras[str(key)] = str(value)
-            merged["extras"] = extras
-
-    # Validate-then-dump so we keep stable field ordering and reject
-    # malformed shapes early. Tolerant of partial profiles.
-    try:
-        return UserProfile.model_validate(merged).model_dump(mode="json", exclude_none=True)
-    except Exception as exc:  # pragma: no cover — surfaces in logs
-        _log.warning("memory.long_term.profile_validate_failed", error=type(exc).__name__)
-        return merged
+def _render_transcript(messages: list[BaseMessage]) -> str:
+    """Render a raw transcript (short-session fallback) as the extraction input."""
+    lines: list[str] = []
+    for m in messages:
+        if isinstance(m, HumanMessage):
+            lines.append(f"客户：{m.content}")
+        elif isinstance(m, AIMessage) and not getattr(m, "tool_calls", None):
+            lines.append(f"助理：{m.content}")
+    return "\n".join(lines)
 
 
-async def _upsert_user_profile(
-    pool: asyncpg.Pool,
-    *,
-    channel: str,
-    channel_user_id: str,
-    profile: dict[str, Any],
-) -> None:
-    if not profile:
-        return
-    async with pool.acquire() as conn:
-        await conn.execute(
-            """
-            INSERT INTO agent.user_profile (channel, channel_user_id, profile)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (channel, channel_user_id) DO UPDATE
-              SET profile = EXCLUDED.profile, updated_at = now()
-            """,
-            channel,
-            channel_user_id,
-            profile,
-        )
+def _build_prompt(
+    existing_user_memory: list[dict[str, Any]], session_input: str
+) -> list[BaseMessage]:
+    existing_json = json.dumps(
+        [
+            {"attr_key": r["attr_key"], "attr_value": r["attr_value"], "kind": r["kind"]}
+            for r in existing_user_memory
+        ],
+        ensure_ascii=False,
+    )
+    return [
+        SystemMessage(content=SESSION_END_EXTRACTION_SYSTEM_PROMPT),
+        HumanMessage(
+            content=(
+                f"<existing_user_memory>\n{existing_json}\n</existing_user_memory>\n\n"
+                f"<session_input>\n{session_input}\n</session_input>"
+            )
+        ),
+    ]
 
 
 async def promote_to_long_term(
@@ -166,122 +106,111 @@ async def promote_to_long_term(
     *,
     session_id: str,
 ) -> dict[str, int] | None:
-    """Promote this session's working memory to long-term storage.
+    """Consolidate an expired session into user + episodic memory (V2 pipeline).
 
-    Returns ``{"profile_updated": 0|1, "events_inserted": N}`` on
-    success or ``None`` when there's nothing to promote.
+    Pulls its inputs from ``ctx``: ``pool``, ``redis``, ``llm_caller``,
+    ``embedder``, optional ``fallback_messages`` (raw transcript for a short
+    session whose working memory is empty), and optional ``settings`` (for
+    policy-gate thresholds).
 
-    On success, the session's working-memory list is deleted so a
-    re-run is a clean no-op.
+    Returns ``{"user_memory_written": N, "events_inserted": M}`` on success, or
+    ``None`` when there's no session row / nothing to consolidate / the LLM call
+    fails. On success the working-memory list is deleted so a re-run no-ops.
     """
     pool: asyncpg.Pool = ctx["pool"]
     redis = ctx["redis"]
     llm_caller: LLMCaller = ctx["llm_caller"]
     embedder: Embeddings = ctx["embedder"]
+    fallback_messages: list[BaseMessage] = ctx.get("fallback_messages") or []
+    floor, dedup_floor = _gate_thresholds(ctx.get("settings"))
 
     with bind_request(session_id=session_id):
         identity = await _read_session_identity(pool, session_id)
         if identity is None:
-            _log.info("memory.long_term.no_session_row")
+            _log.info("memory.session_end.no_session_row")
             return None
         channel, channel_user_id = identity
 
         working = await read_working_memory(redis, session_id=session_id)
-        if not working:
-            _log.info("memory.long_term.no_working_memory")
+        if working:
+            session_input = _render_working(working)
+        elif fallback_messages:
+            session_input = _render_transcript(fallback_messages)
+        else:
+            _log.info("memory.session_end.no_input")
+            return None
+        if not session_input.strip():
             return None
 
-        existing = await _read_existing_profile(
+        existing = await read_active_user_memory(
             pool, channel=channel, channel_user_id=channel_user_id
         )
 
-        prompt = _build_prompt(existing, working)
+        prompt = _build_prompt(existing, session_input)
         try:
-            result = await llm_caller.chat("memory_extract", prompt, structured=ExtractionResult)
+            result = await llm_caller.chat("memory_extract", prompt, structured=MemoryExtraction)
         except Exception as exc:
-            _log.error("memory.long_term.llm_failed", error=type(exc).__name__)
+            _log.error("memory.session_end.llm_failed", error=type(exc).__name__)
             return None
 
-        try:
-            payload = (
-                json.loads(result.message.content)
-                if isinstance(result.message.content, str)
-                else {}
+        extraction = result.parsed
+        if not isinstance(extraction, MemoryExtraction):
+            _log.error("memory.session_end.parse_failed")
+            return None
+
+        # --- Policy gate (deterministic): importance floor + PII mask ---
+        user_c = apply_pii_mask(apply_importance_floor(extraction.user_candidates, floor=floor))
+        epi_c = apply_pii_mask(apply_importance_floor(extraction.episodic_candidates, floor=floor))
+
+        # --- Semantic tier: bi-temporal upsert + profile-cache rebuild ---
+        user_written = 0
+        for cand in user_c:
+            outcome = await upsert_user_memory(
+                pool,
+                channel=channel,
+                channel_user_id=channel_user_id,
+                candidate=cand,
+                session_id=session_id,
             )
-            extracted = ExtractionResult.model_validate(payload)
-        except Exception as exc:
-            _log.error("memory.long_term.parse_failed", error=type(exc).__name__)
-            return None
+            if outcome in ("inserted", "superseded", "reaffirmed"):
+                user_written += 1
+        if user_written:
+            await rebuild_profile_cache(pool, channel=channel, channel_user_id=channel_user_id)
 
-        profile_updated = 0
-        if extracted.profile_updates:
-            merged = _merge_profile(existing, extracted.profile_updates)
-            if merged != existing:
-                await _upsert_user_profile(
-                    pool,
-                    channel=channel,
-                    channel_user_id=channel_user_id,
-                    profile=merged,
-                )
-                profile_updated = 1
+        # --- Episodic tier: embed once → dedup → append ---
+        events_inserted = 0
+        if epi_c and embedder:
+            vectors = await embedder.aembed_documents([c.content for c in epi_c])
+            kept, kept_vecs = await dedup_episodic(
+                pool,
+                channel=channel,
+                channel_user_id=channel_user_id,
+                candidates=epi_c,
+                vectors=vectors,
+                similarity_floor=dedup_floor,
+            )
+            events_inserted = await insert_episodic_candidates(
+                pool,
+                channel=channel,
+                channel_user_id=channel_user_id,
+                session_id=session_id,
+                candidates=kept,
+                vectors=kept_vecs,
+            )
 
-        events_inserted = await insert_event_memories(
-            pool,
-            channel=channel,
-            channel_user_id=channel_user_id,
-            session_id=session_id,
-            entries=extracted.event_memories,
-            embedder=embedder,
-        )
-
-        # Working memory has served its purpose for this session.
         await delete_working_memory(redis, session_id=session_id)
 
         _log.info(
-            "memory.long_term.done",
-            profile_updated=profile_updated,
+            "memory.session_end.done",
+            user_memory_written=user_written,
             events_inserted=events_inserted,
         )
-        return {"profile_updated": profile_updated, "events_inserted": events_inserted}
+        return {"user_memory_written": user_written, "events_inserted": events_inserted}
 
 
-async def extract_from_messages(
-    messages: list[Any],
-    *,
-    llm_caller: LLMCaller,
-) -> ExtractionResult:
-    """Extract working + event memories from raw message history (no LLM result store needed).
-
-    Used for short sessions that end before the token threshold fires,
-    so working memory was never populated. Token-cheap: the result is
-    ``working_memories + event_memories`` only; ``profile_updates`` is
-    deferred (caller merges if needed).
-    """
-    # Build a compact transcript: keep HumanMessage + AIMessage content only.
-    from langchain_core.messages import AIMessage
-    from langchain_core.messages import HumanMessage as HMsg
-
-    lines: list[str] = []
-    for m in messages:
-        if isinstance(m, HMsg):
-            lines.append(f"客户：{m.content}")
-        elif isinstance(m, AIMessage) and not getattr(m, "tool_calls", None):
-            lines.append(f"助理：{m.content}")
-
-    if not lines:
-        return ExtractionResult()
-
-    transcript = "\n".join(lines)
-    prompt = [
-        SystemMessage(content=MID_SESSION_EXTRACTION_SYSTEM_PROMPT),
-        HumanMessage(content=f"<conversation>\n{transcript}\n</conversation>"),
-    ]
-    try:
-        result = await llm_caller.chat("memory_extract", prompt, structured=ExtractionResult)
-        parsed = result.parsed
-        if isinstance(parsed, ExtractionResult):
-            return parsed
-    except Exception as exc:
-        _log.error("memory.extract_from_messages.failed", error=type(exc).__name__)
-
-    return ExtractionResult()
+def _gate_thresholds(settings: Any) -> tuple[float, float]:
+    """Resolve (importance_floor, dedup_similarity_floor) from settings or defaults."""
+    mem = getattr(settings, "memory", None)
+    floor = getattr(mem, "consolidation_importance_floor", DEFAULT_IMPORTANCE_FLOOR)
+    dedup = getattr(mem, "consolidation_dedup_similarity_floor", DEFAULT_DEDUP_SIMILARITY_FLOOR)
+    return float(floor), float(dedup)
