@@ -69,6 +69,16 @@ milvus:
 skill:
   internal_repo_path: ""               # dir of markdown SOPs; empty disables
 
+intent:
+  # Per-category confidence thresholds (top-1 must clear its bar, else clarify).
+  threshold_refund: 0.6
+  threshold_logistics: 0.55
+  threshold_complaint: 0.6
+  threshold_general: 0.45
+  threshold_chitchat: 0.5
+  ambiguity_margin: 0.15               # top-1 must lead top-2 by this, else ambiguous
+  max_clarify_turns: 1                 # clarifications per conversation before top-1 fallback
+
 mcp:
   # JSON array of MCP server configs. Empty "[]" disables MCP (no extra tools).
   # Each entry: {id, transport(stdio|http|sse), url|command, auth_type, ...}.

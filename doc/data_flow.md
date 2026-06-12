@@ -257,7 +257,7 @@ V2 把"扁平的 MemoryEntry 句子"拆成**语义/情节二分**的清晰边界
 │     recall_memory 工具召回（cosine·recency·importance；命中 +access）│
 │     月度巩固：同 subject 成簇 → 一条 summary + 按 activation 删 raw │
 └────────────────────────────────────────────────────────────────────┘
-┌────────────── 用户���忆 User (双时态, 可覆盖) ──────────────┐
+┌────────────── 用户记忆 User (双时态, 可覆盖) ──────────────┐
 │ PG  agent.user_memory   一个 attr_key 一条 active 行         │
 │     attr_key/attr_value/kind(preference|constraint|pattern) │
 │     source/confidence, status(active|superseded)            │

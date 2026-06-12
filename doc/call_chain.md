@@ -109,13 +109,15 @@ final_state = await graph.ainvoke(input_state, config=config)
 [backend/v/agents/graph.py:build_graph](../backend/v/agents/graph.py)
 
 ```
-enter → compress → intent → agent → route_after_agent → ┬→ tools → agent → ...
-                                                        └→ reflect → exit → END
+enter → compress → intent ─┬→ clarify → agent      （模糊，未超上限）
+                           ├→ agent_fast → exit     （纯闲聊 chitchat）
+                           └→ agent → route_after_agent ─┬→ tools → agent → ...
+                                                         └→ reflect → exit → END
 ```
 
 配 [RedisCheckpointer](../backend/v/agents/checkpointer.py)，热路径。
 
-### 6.1 enter_node → intent_node → agent_node
+### 6.1 enter_node → intent_node → (clarify) → agent_node
 
 enter_node 按**冷热分层**注入 system prompt（提升 prefix 缓存命中率）：
 - **COLD** SystemMessage：persona + channel + 冻结的 `<available_skills>` 目录（仅技能名 + 描述）。与客户无关，跨会话可缓存。
@@ -124,7 +126,15 @@ enter_node 按**冷热分层**注入 system prompt（提升 prefix 缓存命中�
 
 技能不再按关键词预注入正文——模型从目录自选，按需调用 `load_skill(name)` 工具取回正文（落到对话热区）。
 
-intent_node（flash LLM）分类意图 → agent_node（primary LLM）生成回复或工具调用。
+**intent_node（flash LLM）输出五类概率分布**（refund/logistics/complaint/general/chitchat），路由层据此**派生**三态（`_derive_routing`，纯函数）：
+- top-1 未过该类阈值，或 top-1 与 top-2 差值 < margin → **模糊 ambiguous** → `clarify`（受 `max_clarify_turns` 限制，超限则兜底按 top-1 进 agent）。
+- top-2 两类都过各自阈值 → **混合 mix** → `agent` + 强制 reflect（多诉求易漏答）。
+- 纯 chitchat 单意图 → `agent_fast`（无工具，低延迟）。
+- 其余单意图（refund/logistics/complaint/general）→ `agent`；refund/logistics 置 `needs_reflection`。
+
+**clarify_node 不调 LLM**：只设一个瞬态 directive（让 agent 先答 top-1，并在结尾自然确认客户真实诉求），由 agent_node **仅本轮注入** LLM 调用，不写回 messages（保缓存前缀与历史干净）；同时 `clarify_count+1`，下次再模糊就兜底。
+
+agent_node（primary LLM）生成回复或工具调用。
 
 ### 6.2 工具分支
 
@@ -138,7 +148,7 @@ intent_node（flash LLM）分类意图 → agent_node（primary LLM）生成回�
 
 
 
-compression_node 还负责中段记忆提取：一次 LLM 调用同时产出 conversation_state（结构化对话状态）+ working_memories → Redis + event_memories → PG；截断 head 后注入 `<compressed_history>` 渲染 conversation_state 实现无缝衔接；不更新 user_profile（会话仍活跃）。
+compression_node 还负责中段记忆提取：一次 LLM 调用产出 conversation_state（结构化对话状态）+ working/event 句子 fold 进 Redis 工作记忆（不写 PG）；截断 head 后注入 `<compressed_history>` 渲染 conversation_state 实现无缝衔接。durable 写入集中到 session-end。
 
 ### 6.3 reflection_node
 

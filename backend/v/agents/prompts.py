@@ -89,27 +89,42 @@ INTENT_SYSTEM_PROMPT = """<role>
 </role>
 
 <task>
-读取 <message> 中客户最新发来的一句话，从下方四类中选出最匹配的一类，并给出 0-1 的置信度。
+读取 <message> 中客户最新发来的一句话，对下方五类意图各给出一个 0-1 的概率，\
+表示该消息属于该类的可能性。允许一条消息同时高度命中多类（如"要退款顺便问物流"）。
 </task>
 
 <intents>
 - refund：退款 / 退货 / 换货 / 申请售后。
 - logistics：物流 / 快递 / 单号 / 签收 / 配送时间相关。
 - complaint：明确抱怨、不满、问责、要求赔偿、情绪激烈。
-- general：寒暄、咨询商品 / 价格 / 优惠、其他不属于上述三类的内容。
+- general：咨询商品 / 价格 / 优惠 / 使用方法等实质问题，但不属于上述三类。
+- chitchat：纯社交寒暄（你好 / 在吗 / 谢谢 / 再见），无实质业务诉求。
 </intents>
 
 <output_format>
-仅输出 JSON 对象，键名严格使用：intent、confidence。\
-不要包裹 ```json``` 代码块，不要解释，不要换行。
-示例：{"intent":"refund","confidence":0.92}
+仅输出 JSON 对象，键名严格使用：refund、logistics、complaint、general、chitchat，\
+值为 0-1 概率。不要包裹 ```json``` 代码块，不要解释，不要换行。\
+五个概率应尽量反映真实分布（之和接近 1，但不强制）。
+示例：{"refund":0.85,"logistics":0.10,"complaint":0.03,"general":0.02,"chitchat":0.0}
 </output_format>
 
 <rules>
-- 一条消息归到一个最强意图；混合意图取占主导的那一类。
-- 置信度反映"该消息确实属于该类"的把握，不是"该客户最终会做什么"。
-- 不确定时选 general，confidence 置 0.5 即可，禁止编造。
+- 概率反映"该消息确实属于该类"的把握，不是"该客户最终会做什么"。
+- 一句话只有一个真实诉求时，让该类概率明显领先（≥0.7），其余压低。
+- 一句话确有两个诉求时（退款 + 物流），让这两类都给高分，不要强行二选一。
+- 模糊、看不准是哪类时，把概率摊平（如两类各 0.4-0.5），不要硬拔高某一类，\
+  也不要编造。摊平的分布会触发系统的澄清询问。
+- 纯寒暄给 chitchat 高分；其余四类压低。
 </rules>"""
+
+
+# ── Intent clarification (ambiguous distribution → ask before acting) ─────────
+
+INTENT_CLARIFY_DIRECTIVE = (
+    "【系统提示：本轮意图不明确，分类器在「{top1}」与「{top2}」之间无法确定。"
+    "请先按可能性更高的「{top1}」简要回应，并在结尾用一句话自然地向客户确认其真实诉求"
+    "（例如「您是想办理{top1_cn}，还是{top2_cn}呢？」），不要罗列选项或显得机械。】"
+)
 
 
 # ── Reflection / hallucination check ──────────────────────────────────────────

@@ -316,6 +316,48 @@ class SkillSettings(_YamlSettings):
     disables the loader."""
 
 
+class IntentSettings(_YamlSettings):
+    """Intent-classification routing thresholds.
+
+    The intent node emits a probability distribution over five base intents.
+    The router derives three states from that distribution + these knobs:
+
+    - **single**: the top intent clears its per-category threshold and leads
+      the runner-up by at least ``ambiguity_margin``.
+    - **mix**: the top TWO intents both clear their thresholds (the customer
+      genuinely raised two needs) — routed through reflection.
+    - **ambiguous**: the top intent is below its threshold, or the top two are
+      within ``ambiguity_margin`` — the classifier is unsure, so the agent
+      asks one clarifying question (capped by ``max_clarify_turns``).
+
+    Per-category thresholds differ because the cost of a wrong route differs:
+    high-stakes intents (refund/complaint) get higher bars; chitchat is cheap
+    to act on so it gets a lower bar.
+    """
+
+    model_config = SettingsConfigDict(**_COMMON, env_prefix="INTENT_")
+
+    threshold_refund: float = Field(default=0.6, ge=0.0, le=1.0)
+    threshold_logistics: float = Field(default=0.55, ge=0.0, le=1.0)
+    threshold_complaint: float = Field(default=0.6, ge=0.0, le=1.0)
+    threshold_general: float = Field(default=0.45, ge=0.0, le=1.0)
+    threshold_chitchat: float = Field(default=0.5, ge=0.0, le=1.0)
+
+    ambiguity_margin: float = Field(default=0.15, ge=0.0, le=1.0)
+    """Top-1 must lead top-2 by at least this, else the pair is 'two-way' and
+    (unless both clear thresholds → mix) treated as ambiguous."""
+
+    max_clarify_turns: int = Field(default=1, ge=0)
+    """How many times one conversation may ask a clarifying question before
+    falling back to acting on the top-1 guess. 0 disables clarification."""
+
+    def threshold_for(self, intent: str) -> float:
+        """Per-intent threshold lookup; unknown intents fall back to general."""
+        return float(
+            getattr(self, f"threshold_{intent}", self.threshold_general)
+        )
+
+
 class MilvusSettings(_YamlSettings):
     """Milvus vector database configuration."""
 
@@ -394,6 +436,7 @@ class AppSettings(BaseModel):
     wecom: WecomSettings
     wecom_aibot: WecomAibotSettings
     skill: SkillSettings
+    intent: IntentSettings
     langsmith: LangSmithSettings
     milvus: MilvusSettings
     rag: RAGSettings
@@ -420,6 +463,7 @@ def get_settings() -> AppSettings:
         wecom=WecomSettings(),
         wecom_aibot=WecomAibotSettings(),
         skill=SkillSettings(),
+        intent=IntentSettings(),
         langsmith=LangSmithSettings(),
         milvus=MilvusSettings(),
         rag=RAGSettings(),

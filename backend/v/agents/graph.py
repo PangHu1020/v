@@ -1,14 +1,17 @@
 """Compile the customer-service LangGraph.
 
-Topology (post-refactor):
+Topology (intent V2 — probability-distribution routing):
 
-    enter -> compress -> intent ──┬── agent_fast (general) -> exit
-                                  └── agent (refund/logistics/complaint)
-                                        │
+    enter -> compress -> intent -> {clarify->agent | agent_fast->exit | agent}
                               [tool_calls?] -> tools (parallel) -> agent
-                                        │
-                              [needs_reflection?] -> reflect ──┬── agent (retry)
-                                                               └── exit
+                              [needs_reflection?] -> reflect -> {agent retry | exit}
+
+intent_node emits a 5-way probability distribution and DERIVES the route:
+top-1 below its per-category threshold OR top-2 within margin -> ambiguous ->
+clarify (capped by max_clarify_turns, then falls back to top-1); top-2 both
+clear their thresholds -> mix -> agent + reflect; pure chitchat -> agent_fast.
+clarify_node only sets a transient directive (answer top-1 + confirm intent),
+consumed by agent_node for one call, never persisted to messages.
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ from backend.v.agents.compression_node import compression_node
 from backend.v.agents.edges import (
     AGENT,
     AGENT_FAST,
+    CLARIFY,
     COMPRESS,
     ENTER,
     EXIT,
@@ -34,7 +38,7 @@ from backend.v.agents.edges import (
     route_after_intent,
     route_after_reflect,
 )
-from backend.v.agents.intent_reflect import intent_node, reflection_node
+from backend.v.agents.intent_reflect import clarify_node, intent_node, reflection_node
 from backend.v.agents.nodes import AGENT_TOOLS, agent_fast_node, agent_node, enter_node, exit_node
 from backend.v.agents.state import CustomerServiceState
 from backend.v.hooks.tool_guard import evaluate_tool_calls, update_error_counts
@@ -131,6 +135,7 @@ def build_graph(checkpointer: BaseCheckpointSaver, *, extra_tools: list[Any] | N
     graph.add_node(ENTER, enter_node)
     graph.add_node(COMPRESS, compression_node)
     graph.add_node(INTENT, intent_node)
+    graph.add_node(CLARIFY, clarify_node)
     graph.add_node(AGENT, _agent)
     graph.add_node(AGENT_FAST, agent_fast_node)
     graph.add_node(TOOLS, _make_guarded_tools_node(bound_tools))
@@ -141,8 +146,12 @@ def build_graph(checkpointer: BaseCheckpointSaver, *, extra_tools: list[Any] | N
     graph.add_edge(ENTER, COMPRESS)
     graph.add_edge(COMPRESS, INTENT)
     graph.add_conditional_edges(
-        INTENT, route_after_intent, {"agent": AGENT, "agent_fast": AGENT_FAST}
+        INTENT,
+        route_after_intent,
+        {"clarify": CLARIFY, "agent": AGENT, "agent_fast": AGENT_FAST},
     )
+    # Clarify only sets a transient directive, then hands to the full agent.
+    graph.add_edge(CLARIFY, AGENT)
     graph.add_conditional_edges(
         AGENT, route_after_agent, {"tools": TOOLS, "reflect": REFLECT, "exit": EXIT}
     )

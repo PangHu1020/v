@@ -11,8 +11,9 @@ from backend.v.agents.state import CustomerServiceState
 ENTER = "enter"
 COMPRESS = "compress"
 INTENT = "intent"
+CLARIFY = "clarify"
 AGENT = "agent"
-AGENT_FAST = "agent_fast"  # general intent: no tools bound
+AGENT_FAST = "agent_fast"  # chitchat: no tools bound
 TOOLS = "tools"
 REFLECT = "reflect"
 EXIT = "exit"
@@ -23,9 +24,17 @@ _REFLECTION_INTENTS = frozenset({"refund", "logistics"})
 
 def route_after_intent(
     state: CustomerServiceState,
-) -> Literal["agent", "agent_fast"]:
-    """Route general intent to tool-free fast path; all others to full agent."""
-    if state.get("intent") == "general":
+) -> Literal["clarify", "agent", "agent_fast"]:
+    """Route by the derived intent state.
+
+    - ambiguous (under clarify cap) → clarify, which then hands to agent.
+    - pure chitchat single intent → tool-free fast path.
+    - everything else (mix, refund, logistics, complaint, general, or an
+      ambiguous turn that exhausted the clarify cap) → full agent.
+    """
+    if state.get("needs_clarify"):
+        return "clarify"
+    if state.get("intent") == "chitchat" and not state.get("is_mix"):
         return "agent_fast"
     return "agent"
 

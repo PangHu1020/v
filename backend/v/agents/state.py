@@ -38,6 +38,13 @@ class CustomerServiceState(TypedDict, total=False):
     tool_error_counts: dict[str, int]
     # Phase-3 Group E: intent routing + reflection
     intent: str
-    needs_reflection: bool  # set by intent_node; True only for refund/logistics
+    needs_reflection: bool  # set by intent_node; True for refund/logistics/mix
     reflection_retries: int
     reflection_failed: bool
+    # Intent V2: probability-distribution routing
+    intent_scores: dict[str, float]  # full distribution, for logging/debug
+    secondary_intent: str  # top-2 intent (drives mix handling)
+    is_mix: bool  # top-2 both cleared their thresholds
+    needs_clarify: bool  # ambiguous + under the clarify cap
+    clarify_count: int  # clarifications asked this conversation
+    intent_directive: str  # transient prompt hint for agent_node (not persisted to messages)

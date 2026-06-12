@@ -187,9 +187,18 @@ async def agent_node(
 
     started = time.perf_counter()
     bound_tools = tools if tools is not None else AGENT_TOOLS
+
+    # A clarify directive (set by clarify_node) is injected for THIS call only —
+    # appended as a transient SystemMessage, never written back to state, so the
+    # cache-stable prompt prefix and the persisted history stay clean.
+    call_messages = list(state.get("messages", []))
+    directive = state.get("intent_directive")
+    if directive:
+        call_messages.append(SystemMessage(content=directive))
+
     result = await caller.chat(
         "main_primary",
-        list(state.get("messages", [])),
+        call_messages,
         tools=bound_tools,
         config=config,
     )

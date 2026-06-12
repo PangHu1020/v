@@ -112,6 +112,34 @@ class TestMemorySettings:
         assert s.activation_w_access == 0.9
 
 
+class TestIntentSettings:
+    def test_defaults(self) -> None:
+        from backend.v.configs.base import IntentSettings
+
+        s = _no_env_file(IntentSettings)
+        assert s.threshold_refund == 0.6
+        assert s.threshold_chitchat == 0.5
+        assert s.ambiguity_margin == 0.15
+        assert s.max_clarify_turns == 1
+
+    def test_threshold_for_lookup(self) -> None:
+        from backend.v.configs.base import IntentSettings
+
+        s = _no_env_file(IntentSettings)
+        assert s.threshold_for("logistics") == 0.55
+        # Unknown intent falls back to the general threshold.
+        assert s.threshold_for("bogus") == s.threshold_general
+
+    def test_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from backend.v.configs.base import IntentSettings
+
+        monkeypatch.setenv("INTENT_THRESHOLD_REFUND", "0.8")
+        monkeypatch.setenv("INTENT_MAX_CLARIFY_TURNS", "2")
+        s = _no_env_file(IntentSettings)
+        assert s.threshold_refund == 0.8
+        assert s.max_clarify_turns == 2
+
+
 class TestChannelSettings:
     def test_wecom_prefix(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("WECOM_CORP_ID", "ww123")
