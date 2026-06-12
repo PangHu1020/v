@@ -14,11 +14,14 @@ Strict directory boundaries:
 - **Core Logic (`/backend/v/`)**:
   - `/agents`: LangGraph brain. State definitions (`state.py`), nodes (`nodes.py`), edges (`edges.py`), graph assembly (`graph.py`). Exposes invocation interfaces consumed by bus workers and cron.
   - `/agents/background/`: **Background analysts** (NOT graph nodes, NOT subagents). Async coroutines triggered by hooks: `summarizer.py` for context compression. Runs out-of-band so the main graph is not blocked.
-  - `/memory`: Hierarchical memory manager.
-    - `working.py`: Redis-backed working memory (TTL 30 min). Single source of truth for active-session state and LangGraph checkpointer (hot path).
-    - `session.py`: Postgres-backed session memory (consolidated working memory of completed/expiring sessions).
-    - `long_term.py`: Postgres long-term memory split into two tables — see Memory Hierarchy below.
-    - `memory_extractor.py`: two public functions — `promote_to_long_term` (working memory → user_profile + event_memory, used at session-end) and `extract_from_messages` (raw history → ExtractionResult, used for short sessions that never triggered mid-session compression).
+  - `/memory`: Hierarchical memory manager (V2 — three bounded tiers).
+    - `working.py`: Redis-backed working memory (TTL 30 min). Single source of truth for active-session state (hot path).
+    - `event_memory.py`: episodic tier (`agent.event_memory`, append-only events + pgvector). `insert_episodic_candidates` (V2 write, tier='raw') + `read_recent_event_memories`.
+    - `user_memory.py`: semantic tier (`agent.user_memory`, bi-temporal overwritable attributes). `upsert_user_memory` (three-step supersede) + `rebuild_profile_cache` (projects active rows into the `user_profile` JSONB cache).
+    - `long_term.py`: reads the `user_profile` JSONB cache.
+    - `policy_gate.py`: deterministic write gate — importance floor + PII mask + episodic same-subject dedup.
+    - `memory_extractor.py`: `promote_to_long_term` — the single session-end durable-write orchestrator (one LLM call → both tiers).
+    - `consolidation.py`: `consolidate_user` — monthly episodic forgetting (cluster→summary + ACT-R activation prune); lazy-triggered on session start.
   - `/tools`: Built-in tools, all implemented via LangChain `@tool(parse_docstring=True)` so the docstring IS the tool description exposed to the LLM. Each tool's "when to use" lives in its own docstring, not in the system prompt.
     - `calculator` — safe AST eval (no `eval()`, whitelisted ops, exponent ≤ 64).
     - `search` — thin tool wrapper over `rag/retriever.py`; generic semantic recall over `agent.knowledge_chunk` (products / FAQ / policies). Does NOT recency-rank.
@@ -44,14 +47,12 @@ Strict directory boundaries:
 
 # Architecture constraints
 - **Passive Invocation**: `/v/` exposes interfaces; it is invoked by bus workers or ARQ. Never define FastAPI routes or auth here.
-- **Hierarchical Memory Lifecycle (CRITICAL)**:
-  - **Working Memory (Redis)**: current-session `messages` + LangGraph state. TTL 30 min. **Single source of truth on the hot path.** New session_id created when 30-min silence elapses.
-    - **Mid-session** (token threshold): `compression_node` runs ONE LLM call that emits an `ExtractionResult` carrying both durable memory (`working_memories` → Redis, `event_memories` → PG) AND a structured `conversation_state` (current_topic / events / actions_taken / unresolved_questions / key_facts). The dropped head is replaced by a `<compressed_history>` block rendering that state, so the agent resumes the dialogue seamlessly. No profile update mid-session.
-    - **Session-end** (next message after silence): `_promote_prev_session` fires; if working memory is non-empty → promote directly (no extra LLM call); if empty (short session) → `extract_from_messages()` from checkpoint history then promote.
-  - **Long-term Memory (Postgres, two tables)**:
-    - `user_profile`: structured, **one row per `(channel, channel_user_id)`** (preferences, member level, recent-order summary, etc.). Fully injected into system prompt at every `on_session_start`.
-    - `event_memory`: vectorized (Qwen `text-embedding-v4`, 1024-dim Matryoshka), pgvector HNSW index. Queried on-demand via the `recall_memory` tool with recency-weighted cosine ranking. Distinct from `agent.knowledge_chunk` (which `search` reads): event_memory is per-customer episodic; knowledge_chunk is the shared corpus.
-    - Writes use `memory_extractor` with DeepSeek v4 flash + Pydantic structured output. **Dedup, conflict, and obsolescence are mandatory** — never blindly append.
+- **Hierarchical Memory Lifecycle (CRITICAL — memory V2)**: three clearly-bounded tiers.
+  - **Working memory (Redis, session-scoped)**: current `messages` + LangGraph state + distilled session signal. TTL 30 min. **Single source of truth on the hot path.** New session_id minted after 30-min silence.
+    - **Mid-session** (token threshold): `compression_node` runs ONE LLM call → a structured `conversation_state` (current_topic / events / actions_taken / unresolved_questions / key_facts) + working/event sentences. The sentences fold into **Redis working memory only** (NO mid-session Postgres write); the dropped head is replaced by a `<compressed_history>` block rendering the state for seamless resumption.
+  - **Episodic memory (`agent.event_memory`, append-only events)**: "what happened" — complaints, enquiries, orders. Vectorized (Qwen `text-embedding-v4`, 1024-dim), pgvector HNSW. Recalled by the `recall_memory` tool (recency+importance cosine; bumps `access_count` per hit). Events never conflict — only append, dedup (same-subject cosine), and **monthly consolidation**: closed-month per-subject clusters are summarised into one `tier='summary'` row and low-**activation** raws (`importance + ln(1+access) − ln(1+age)`, ACT-R) are pruned — use-it-or-lose-it. Lazy trigger: fired fire-and-forget when a returning customer starts a session.
+  - **User memory (`agent.user_memory`, bi-temporal, overwritable)**: "what the customer is like" — preferences / constraints / patterns. One active row per `attr_key`; an overwrite supersedes (old row `status='superseded'`, `valid_to`, `superseded_by` — never deleted, the chain is the audit log). Arbitration: stated>inferred>confidence>recency. No embedding; projected into the `user_profile` JSONB cache (rebuilt on each write) and injected whole at `on_session_start`. Never forgotten — only flagged stale via `last_confirmed_at`.
+  - **Session-end consolidation** (`promote_to_long_term`, fire-and-forget on session mint): ONE `memory_extract` LLM call over working memory (or the checkpoint transcript for a short session) → `MemoryExtraction` → policy gate (importance floor + PII mask) → bi-temporal upsert of user candidates + episodic append (embed-once → dedup). **This is the single durable-write site** — all PII is masked here before storage (`utils/pii.py`).
 - **Subagent Has No Common Abstraction**: do NOT introduce a `BaseSubAgent`. Background analysts (summarizer, memory_extractor) are async coroutines. The `subagent` tool is a focused single-shot LLM call. They share only the `LLMCaller` utility.
 - **Skill**: install / update / list / pin operations are handled in `/skills`. Trust boundary enforced when loading executable skills. **Injection model (cold/hot)**: `enter_node` emits the system prompt in volatility tiers so the provider's prefix cache stays warm — a COLD `SystemMessage` (persona + channel + frozen `<available_skills>` catalog; customer-independent, cross-session-cacheable) followed by a WARM one (profile + recent_events + session_memory; per-customer, frozen until the next compression). The conversation history is appended after, append-only. Skills are NOT keyword-matched into the prompt; the model selects from the catalog and pulls bodies on demand via the `load_skill` tool (hot layer).
 

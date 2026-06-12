@@ -19,7 +19,7 @@ of the agent runtime, not user memory.
 """
 
 from backend.v.memory.event_memory import (
-    insert_event_memories,
+    insert_episodic_candidates,
     read_recent_event_memories,
     render_recent_events_for_prompt,
 )
@@ -63,7 +63,7 @@ __all__ = [
     "cache_user_profile",
     "delete_working_memory",
     "get_cached_user_profile",
-    "insert_event_memories",
+    "insert_episodic_candidates",
     "promote_to_long_term",
     "read_recent_event_memories",
     "read_user_profile",

@@ -1,8 +1,8 @@
-"""Event memory: medium-term persistent sentence store (PG ``agent.event_memory``).
+"""Episodic memory: append-only event store (PG ``agent.event_memory``).
 
-Replaces the Phase-2 multi-field ``agent.session_memory`` AND the
-Phase-2 ``agent.memory_episodes``. One row = one
-:class:`backend.v.memory.types.MemoryEntry` + an embedding column.
+One row = one customer event ("发生过什么"), with an embedding column for
+semantic recall. Under memory V2 this is the episodic tier; durable attributes
+about the customer live in the separate ``agent.user_memory`` (semantic tier).
 
 Two read paths consume this table:
 
@@ -11,8 +11,10 @@ Two read paths consume this table:
 - The ``recall_memory`` tool runs vector ANN against the same rows
   (lives in :mod:`backend.v.tools.recall_memory`).
 
-The single write path is :func:`insert_event_memories`, called by the
-consolidation flow with vectors already computed.
+The single write path is :func:`insert_episodic_candidates`, called by the
+session-end consolidation pipeline with vectors already computed; rows are
+written ``tier='raw'`` and later folded into ``tier='summary'`` by the monthly
+consolidation in :mod:`backend.v.memory.consolidation`.
 """
 
 from __future__ import annotations
@@ -21,59 +23,10 @@ from datetime import UTC, datetime
 from typing import Any
 
 import asyncpg
-from langchain_core.embeddings import Embeddings
 
-from backend.v.memory.types import MemoryCandidate, MemoryEntry
+from backend.v.memory.types import MemoryCandidate
 
 DEFAULT_EVENT_TTL_DAYS = 30
-
-
-async def insert_event_memories(
-    pool: asyncpg.Pool,
-    *,
-    channel: str,
-    channel_user_id: str,
-    session_id: str | None,
-    entries: list[MemoryEntry],
-    embedder: Embeddings,
-    ttl_days: int = DEFAULT_EVENT_TTL_DAYS,
-) -> int:
-    """Embed each entry's content and INSERT one row per item.
-
-    Returns the count actually inserted. Empty entries → no embedding
-    round-trip, returns 0.
-    """
-    if not entries:
-        return 0
-    contents = [e.content for e in entries]
-    vectors = await embedder.aembed_documents(contents)
-
-    inserted = 0
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            for entry, vec in zip(entries, vectors, strict=True):
-                await conn.execute(
-                    """
-                    INSERT INTO agent.event_memory
-                        (channel, channel_user_id, session_id,
-                         content, kind, importance, keywords,
-                         embedding, created_at, expires_at)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz,
-                            $9::timestamptz + ($10 || ' days')::interval)
-                    """,
-                    channel,
-                    channel_user_id,
-                    session_id,
-                    entry.content,
-                    entry.kind,
-                    float(entry.importance),
-                    entry.keywords,
-                    vec,
-                    entry.created_at,
-                    str(ttl_days),
-                )
-                inserted += 1
-    return inserted
 
 
 async def insert_episodic_candidates(
@@ -87,9 +40,9 @@ async def insert_episodic_candidates(
 ) -> int:
     """Append episodic candidates as ``tier='raw'`` rows (memory V2 write path).
 
-    Unlike :func:`insert_event_memories`, this writes the V2 provenance columns
-    (``subject``/``source``/``confidence``/``period``) and leaves ``expires_at``
-    NULL — episodic forgetting is driven by monthly consolidation, not TTL.
+    Writes the V2 provenance columns (``subject``/``source``/``confidence``/
+    ``period``) and leaves ``expires_at`` NULL — episodic forgetting is driven
+    by monthly consolidation, not TTL.
     ``period`` is derived from each candidate's created-at month (``YYYY-MM``).
 
     Vectors are precomputed by the caller (the policy gate embeds once and
@@ -184,7 +137,7 @@ async def read_recent_event_memories(
 
 __all__ = [
     "DEFAULT_EVENT_TTL_DAYS",
-    "insert_event_memories",
+    "insert_episodic_candidates",
     "read_recent_event_memories",
     # Re-export so callers (e.g., enter_node) keep working without
     # re-importing the prompts module separately.

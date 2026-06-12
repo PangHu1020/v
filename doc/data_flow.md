@@ -236,133 +236,85 @@ INSERT agent.    GET 命中             session 键自然过期    （+ 长记�
 - 同一会话内 N 条消息，被 debouncer 合并前已经顺序串行；合并后只有 1 条进 bus。
 - 跨会话 / 跨用户消息互相独立。
 
-## 7. 记忆分层与异步提取（Phase-3 Group C/H 完整）
+## 7. 记忆分层与异步提取（记忆 V2）
 
 ### 7.1 三层记忆架构
 
+V2 把"扁平的 MemoryEntry 句子"拆成**语义/情节二分**的清晰边界：
+
 ```
-┌────────────────── Working Memory (热路径) ──────────────────┐
-│ Redis  ckpt:{thread_id}         TTL=1800s                   │  ← LangGraph checkpointer
-│ Redis  working:{session_id}     TTL=1800s                   │  ← 本会话待提取的记忆条目 (MemoryEntry[])
-│ Redis  profile:{ch}:{u}         TTL=1800s                   │  ← user_profile 缓存
-│ Redis  session:{ch}:{u}         TTL=3600s                   │  ← 当前 session_id
-│ Redis  last_seen:{ch}:{u}       TTL=3600s                   │  ← 静默判断
-│ Redis  proactive_log:{ch}:{u}   TTL=30d                     │  ← 主动消息历史
+┌────────────────── 工作记忆 Working (热路径, 会话级) ──────────────────┐
+│ Redis  ckpt:{thread_id}         TTL=1800s   ← LangGraph checkpointer  │
+│ Redis  working:{session_id}     TTL=1800s   ← 本会话待固化的记忆 + 摘要 │
+│ Redis  profile:{ch}:{u}         TTL=1800s   ← user_profile 缓存        │
+│ Redis  session/last_seen:{ch}:{u}           ← session_id / 静默判断    │
+└────────────────────────────────────────────────────────────────────────┘
+       ▼ promote_to_long_term（session mint 时 fire-and-forget，唯一持久写入点）
+┌────────────── 情节记忆 Episodic (append-only 事件) ──────────────┐
+│ PG  agent.event_memory   一行 = 一件"发生过的事"                  │
+│     content, embedding vector(1024), subject, source, confidence │
+│     tier(raw|summary), period, access_count, activation          │
+│     recall_memory 工具召回（cosine·recency·importance；命中 +access）│
+│     月度巩固：同 subject 成簇 → 一条 summary + 按 activation 删 raw │
+└────────────────────────────────────────────────────────────────────┘
+┌────────────── 用户���忆 User (双时态, 可覆盖) ──────────────┐
+│ PG  agent.user_memory   一个 attr_key 一条 active 行         │
+│     attr_key/attr_value/kind(preference|constraint|pattern) │
+│     source/confidence, status(active|superseded)            │
+│     valid_from/valid_to/superseded_by  ← 改写=三步 supersede │
+│     无 embedding；投影进 user_profile JSONB 缓存，启动全量注入│
+│ PG  agent.user_profile  ← 当前态物化缓存（每次写入后重建）   │
 └──────────────────────────────────────────────────────────────┘
-       ▼ promote_to_long_term（session-end 触发，fire-and-forget）
-┌─────────────── Event Memory (中期，30 天) ────────────��─┐
-│ PG  agent.event_memory                                  │  ← 一行 = 一条可召回的记忆片段
-│     content TEXT, embedding vector(1024), expires_at   │     Qwen text-embedding-v3, HNSW cosine
-│     importance, tags[], created_at                      │     recall_memory 工具按 cosine * exp(-age/30d) 召回
-└──────────────────────────────────────────────────────────┘
-       ▼ promote_to_long_term (会话结束时一次性，读 working → 写 profile + event)
-┌────────────── Long-term Memory (永久，去重合并) ─────────────┐
-│ PG  agent.user_profile  PK (channel, channel_user_id)      │  ← 结构化偏好 (JSONB)
-│     customer_name, preferred_language, member_level, ...   │     on_session_start 全量注入 SystemMessage
-│     + extras {}, notes TEXT                                 │
-│ PG  agent.knowledge_chunk  vector(1024)                     │  ← 共享知识语料库（产品 / FAQ / 政策）
-│     (source_type, source_id) UNIQUE, HNSW cosine           │     search 工具语义召回，无 recency 权重
-└─────────────────────────────────────────────────────────────┘
+       （另：agent.knowledge_chunk 是共享知识库，search 工具用，与客户记忆无关）
 ```
 
-### 7.2 异步记忆提取流程详解
+**边界判据**：会变的当前状态（偏好顺丰、过敏、月初下单）→ 用户记忆，可覆盖、冲突只发生在这里；
+发生过的带时间的事（投诉 SO123、问过尺码）→ 情节记忆，只追加、永不冲突。
 
-记忆提取分为**两阶段**，均由 ARQ 后台任务驱动，与主对话流程完全解耦：
+### 7.2 写入流程（全异步，单一持久写入点）
 
-#### 阶段一：compression_node 中段提取（会话活跃期，token 阈值触发）
+所有持久写入集中在 **session-end**（`promote_to_long_term`，session mint 时 fire-and-forget），
+中段压缩只写 Redis、不碰 PG：
 
-**触发时机**（三选一，哪个先到触发哪个）：
-1. **Context 阈值**：`on_context_threshold` hook 检测到 checkpointer 中 messages 数 ≥ 配置阈值（默认 30 条）。
-2. **TTL 临近**：session last_seen 距离 TTL（1800s）还剩 Δ 时间时（如剩 300s），提前触发。
-3. **会话结束**：`on_session_end` hook（目前未实现独立 hook，等同于 30 min 静默后下次新消息到达时检测）。
-
-**实现路径**：
+**阶段一：compression_node 中段压缩（token 阈值触发，仅 Redis）**
 ```
-compression_node（graph 节点，token 超阈值时触发）：
-  1. LLM（memory_extract role）一次调用处理即将截断的 head 消息，输出 ExtractionResult：
-     conversation_state（结构化对话状态快照）+ working_memories + event_memories
-  2. working_memories → Redis RPUSH working:{session_id}（TTL 同 session）
-  3. event_memories → PG agent.event_memory + embed（call insert_event_memories）
-  4. 截断 head 消息，注入 <compressed_history>：渲染 conversation_state
-     （current_topic / events / actions_taken / unresolved_questions / key_facts）
-     + 最新 working memory 摘要；保留最后 N 条消息原文
-  注意：不更新 user_profile（会话未结束）
+compression_node：
+  1. 一次 memory_extract LLM 调用 → ExtractionResult：
+     conversation_state（结构化对话状态）+ working_memories + event_memories
+  2. 两类句子**合并 fold 进 Redis working:{session_id}**（不写 PG）
+  3. 截断 head，注入 <compressed_history>（渲染 conversation_state + 当前 working memory）
+  无 PG 写入——持久化全部留给 session-end
 ```
 
-**结构化对话状态（无缝衔接）**：`conversation_state` 与记忆是两件事——记忆是跨会话的持久事实，
-`conversation_state` 是**本会话的延续性快照**。压缩掉旧消息后，接手的模型读这份结构化摘要即可知道
-"现在在聊什么、已经做了什么、确认了哪些事实、还有什么没解决"，从而无缝继续对话。它和记忆提取
-**合并为一次 LLM 调用**，不额外消耗 token。
-
-**关键特性**：
-- `working_memories` 是**临时便签**：供本会话后续轮次快速访问，TTL 与 session 同步过期。
-- `event_memories` 是**持久记忆**：30 天 TTL，可被 `recall_memory` 工具跨会话召回，每条带 `embedding vector(1024)` + `importance` + `tags[]`。
-- `profile_updates` 在这一阶段**被忽略**——会话活跃时不修改 user_profile，避免频繁写冲突和中间态污染。
-
-#### 阶段二：session-end 固化（新 session mint 时触发，fire-and-forget）
-
-**触发时机**：
-会话彻底结束（30 分钟静默后，Redis working memory 自然过期）时，由外部逻辑（目前可能是手动触发或更上层的 session closer）调用。
-
-**实现路径**：
+**阶段二：session-end 固化（`promote_to_long_term`，唯一持久写入点）**
 ```
-某处检测到 session 已 consolidated 且已过期 →
-ctx["arq_pool"].enqueue("extract_session_memory", session_id=...)
-# extract_session_memory 是 promote_to_long_term 的别名
+1. 读身份 + 读 Redis working memory（空则用 checkpoint transcript 作 fallback_messages）
+2. 一次 memory_extract LLM 调用 → MemoryExtraction：
+   user_candidates（属性，带 attr_key/attr_value/kind/source/confidence）
+   + episodic_candidates（事件，带 subject）
+3. policy_gate（确定性，无 LLM）：重要性下限 → PII 脱敏（utils/pii.py 掩码手机/身份证/地址）
+4. 用户候选：逐条 upsert_user_memory（key 冲突走三步 supersede：
+   旧行 status=superseded+valid_to+superseded_by，新行 active；
+   仲裁 stated>inferred>confidence>recency）→ 重建 user_profile 缓存
+5. 情节候选：embed 一次 → 同 subject cosine 去重 → append (tier='raw', expires_at NULL)
+6. 删 Redis working memory（幂等：重跑即 no-op）
 ```
 
-**执行逻辑**（[backend/v/memory/memory_extractor.py](../backend/v/memory/memory_extractor.py)）：
-```python
-async def promote_to_long_term(ctx, *, session_id):
-    # 1. 读取身份
-    channel, channel_user_id = await _read_session_identity(pool, session_id)
+**结构化对话状态（无缝衔接）**：`conversation_state` 与持久记忆是两件事——它是本会话延续性快照，
+压缩后接手的模型读它即可知道"在聊什么、做了什么、还有什么没解决"。和中段提取**合并为一次 LLM 调用**。
 
-    # 2. 读取 Redis working:{session_id} 中的所有 MemoryEntry
-    working = await read_working_memory(redis, session_id)
-    if not working:
-        return None  # 无内容，幂等退出
+### 7.2.1 遗忘：月度巩固（`consolidate_user`，惰性触发）
 
-    # 3. 读取现有 user_profile
-    existing = await _read_existing_profile(pool, channel, channel_user_id)
-
-    # 4. 调 LLM（DeepSeek v4 flash）做**合并决策**
-    prompt = [
-        SystemMessage(LONG_TERM_PROMOTION_SYSTEM_PROMPT),
-        HumanMessage(f"<existing_profile>{json(existing)}</existing_profile>\n"
-                     f"<working_memory>{json(working)}</working_memory>")
-    ]
-    result: ExtractionResult = await llm_caller.chat(
-        "memory_extract", prompt, structured=ExtractionResult
-    )
-    # 这次的 ExtractionResult:
-    #   profile_updates: dict,  ← **这次会用**，LLM 输出"合并后的完整 profile"
-    #   event_memories: [MemoryEntry],  ← 额外的长期记忆片段（去重后的）
-
-    # 5. 合并 profile（代码层浅合并 + LLM 输出深合并）
-    merged = _merge_profile(existing, result.profile_updates)
-    if merged != existing:
-        await conn.execute(
-            """INSERT INTO agent.user_profile (channel, channel_user_id, profile)
-               VALUES ($1, $2, $3)
-               ON CONFLICT (channel, channel_user_id) DO UPDATE
-                 SET profile = EXCLUDED.profile, updated_at = now()""",
-            channel, channel_user_id, merged
-        )
-
-    # 6. event_memories 再次 embed + INSERT（去重：UNIQUE (source_type, source_id) 或内容哈希）
-    events_inserted = await insert_event_memories(...)
-
-    # 7. 删除 Redis working:{session_id}（已提取完毕，避免重复处理）
-    await delete_working_memory(redis, session_id)
-
-    return {"profile_updated": 1 if merged != existing else 0, "events_inserted": events_inserted}
+情节记忆 append-only，靠**月度巩固**封顶增长。回访客户开启新会话时 fire-and-forget 触发：
 ```
-
-**关键特性**：
-- **LLM 产出合并后的完整 profile**：不在代码里写 if-else 合并规则，而是让 LLM 理解语义冲突（如"偏好顺丰" vs "最近改用京东"），产出最新的正确状态。
-- **去重 + 过时标记**：`_merge_profile` 逻辑 + LLM prompt 明确要求"conflict → recency wins; obsolete info → drop"。
-- **event_memories 二次提取**：从 working memory 中进一步筛选**跨会话仍有价值的条目**（如投诉记录、特殊需求），写入 30 天 TTL 的 event_memory。
-- **幂等性**：working memory 一旦删除，重跑 promote_to_long_term 立即返回 None。
+对已封闭月份（period < 当前月）中 tier='raw' 且未巩固的行：
+  按 (period, subject) 成簇（≥min_cluster_size 才处理）→
+  LLM 压成一条 tier='summary' 行（新 embedding）→
+  按 ACT-R 激活值 activation = w_imp·importance + w_acc·ln(1+access) − w_age·ln(1+age) 剪枝：
+    低于阈值的 raw 删除；高激活的存活并 link 到 summary（不再被重复巩固，仍可召回）
+```
+"用进废退"：被 `recall_memory` 频繁命中的事件 `access_count` 高 → 激活高 → 即使 importance 低也存活。
+稳态每客户 ~数百带向量行，全局有界，不靠 cron。
 
 ### 7.3 召回路径
 
@@ -378,22 +330,23 @@ working_memory = await read_working_memory(redis, session_id)
 # → <working_memory> 注入（本会话累积的临时记忆）
 ```
 
-**recall_memory 工具**（主动召回）：
+**recall_memory 工具**（主动召回，本轮不改排序逻辑）：
 ```python
 @tool("recall_memory", parse_docstring=True)
 async def recall_memory(query: str, config: RunnableConfig) -> str:
     pool, embedder = config["configurable"]["pg_pool"], config["configurable"]["embedder"]
     query_vec = await embedder.aembed_query(query)
     rows = await conn.fetch(
-        """SELECT content, created_at, importance, tags,
+        """SELECT content, created_at, importance, keywords,
                   embedding <=> $1::vector AS distance
            FROM agent.event_memory
-           WHERE channel=$2 AND channel_user_id=$3 AND expires_at > now()
+           WHERE channel=$2 AND channel_user_id=$3 AND (expires_at IS NULL OR expires_at > now())
            ORDER BY distance LIMIT $4""",
         query_vec, channel, channel_user_id, top_k
     )
-    # 时间衰减重排：score = (1 - distance) * exp(-age_days / 30)
-    # 返回 top_k 条格式化文本
+    # 时间衰减 + importance 重排（cosine · exp(-age/half_life) · (0.5+0.5·importance)）
+    # 命中后 touch：UPDATE ... SET last_accessed_at=now(), access_count=access_count+1
+    #   ↑ access_count 喂给月度巩固的 ACT-R 激活值（用进废退）
 ```
 
 **search 工具**（知识库召回，与客户无关）：

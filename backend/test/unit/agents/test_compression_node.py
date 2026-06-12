@@ -144,7 +144,7 @@ class TestCompressionApplies:
         read_mock = AsyncMock(return_value=[*working, *events])
         monkeypatch.setattr("backend.v.memory.working.append_working_memory", append_mock)
         monkeypatch.setattr("backend.v.memory.working.read_working_memory", read_mock)
-        monkeypatch.setattr("backend.v.memory.event_memory.insert_event_memories", insert_mock)
+        monkeypatch.setattr("backend.v.memory.event_memory.insert_episodic_candidates", insert_mock)
 
         out = await compression_node(
             {
