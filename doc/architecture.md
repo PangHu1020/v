@@ -107,6 +107,17 @@ backend/
 
 64 个 shard（可配 `BUS_SHARD_COUNT`）。`mmh3.hash(f"{channel}:{channel_user_id}") % shard_count` 决定归属。共享 DLQ `{prefix}:dlq`。
 
+### 4.2.1 `MemoryConsumer` + `IdleWatcher` ([backend/app/bus/memory_bus.py](../backend/app/bus/memory_bus.py))
+
+三条全局（非分片）记忆任务流，替代原 `asyncio.create_task` fire-and-forget：
+
+- `memory:promote` — session-end 固化（`promote_to_long_term`），进程崩溃后 PEL 自动重投。
+- `memory:consolidate` — 月度情节巩固（ACT-R 激活值剪枝）。
+- `memory:extract` — 空闲预提取：`IdleWatcher` 每 60s 扫 `memory:idle_watch` sorted set，
+  找 5min 未活动的 session 入队，预填 Redis working memory，丰富 session-end 提取输入。
+
+消费方式：consumer group `memory_workers`，count=1，失败写 DLQ 后 XACK。
+
 ### 4.3 `Debouncer` ([backend/app/wecom_aibot/debounce.py](../backend/app/wecom_aibot/debounce.py))
 
 合并 500ms 内同一身份的连续消息，asyncio task 定时器 + Redis hash 双层。
@@ -123,11 +134,11 @@ backend/
 
 共享知识语料库（Milvus `knowledge_chunks` collection）的唯一查询入口。三级 cascade：dense cosine（stage-1） → hybrid BM25+dense（stage-2） → LLM 结构化重写 + hybrid（stage-3）。每级用**相对 margin 置信门控**（`v/rag/gate.py`）决定退出：top-1 过绝对 floor 且 `(top1−top2)/top1 ≥ rel_margin`。门控参数由 `backend.eval.retrieval.calibrate` 在 337-QA 集上按 Youden's J 自动校准（stage1 floor=0.70 / stage2 rel_margin=0.04），实测 hit@5=0.985、stage 分布 ≈ 77%:7%:16%。详见 `backend/eval/README.md`。
 
-### 4.8 `SkillRegistry` ([backend/v/skills/registry.py](../backend/v/skills/registry.py))
+### 4.7 `SkillRegistry` ([backend/v/skills/registry.py](../backend/v/skills/registry.py))
 
 启动时从配置目录加载所有 markdown SOP。采用 Anthropic 式**渐进式披露**：cold 层注入冻结的 `<available_skills>` 目录（`render_catalog`，仅技能名 + 描述），模型自选后调用 `load_skill(name)` 工具取回正文（`get` + 落到对话热区）。目录不做 top-K 截断——它是冻结的 cold 层，列全部技能才能让缓存前缀稳定。
 
-### 4.9 `AppSettings` ([backend/v/configs/base.py](../backend/v/configs/base.py))
+### 4.8 `AppSettings` ([backend/v/configs/base.py](../backend/v/configs/base.py))
 
 10 个独立 BaseSettings 类（按 env_prefix 分隔），由 `get_settings()` 组合：
 

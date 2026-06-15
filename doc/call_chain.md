@@ -79,7 +79,13 @@ handler 由 [backend/app/bus/worker.py:make_bus_handler](../backend/app/bus/work
 
 [backend/app/bus/worker.py:_resolve_session_id](../backend/app/bus/worker.py) — 30 分钟以内复用，否则 mint UUID + INSERT `agent.session`。
 
-新 session mint 时（`minted=True`），`_promote_prev_session(prev_session_id)` 作为 fire-and-forget task 异步触发：将上一个 session 的 working memory 固化为 user_profile + event_memory（有 working memory 直接 promote；无则 extract_from_messages(history) 后 promote）。
+新 session mint 时（`minted=True`），向 Redis Streams 投递两个持久化任务：
+- `await enqueue_promote(redis, session_id=prev_session_id)` → `memory:promote` 流
+  → `MemoryConsumer` 消费 → `promote_to_long_term`：读 working memory（或 checkpoint 兜底）→ 一次 LLM 抽取 → 写 user_memory + episodic_memory + 重建 profile 缓存。
+- `await enqueue_consolidate(redis, channel=..., user_id=...)` → `memory:consolidate` 流
+  → 月度情节巩固（ACT-R 激活值剪枝）。
+
+任务持久化：进程崩溃重启后 PEL 中未 ACK 的消息自动重投，不再 fire-and-forget 丢失。
 
 ### 5.2 加载 user_profile
 

@@ -124,20 +124,9 @@ PG 池或 Redis 创建失败时，FastAPI 会启动失败但错误日志可能�
 
 ### ~~1.13 LangGraph ToolNode Command(resume) 边界 bug~~（已不适用，handoff 层已删除）
 
-### 1.14 Proactive 消息 → 父会话注入还没有 drainer
+### ~~1.14 Proactive 消息 → 父会话注入还没有 drainer~~（主动触达功能整体延期）
 
-[backend/v/cron/proactive.py:record_proactive](../backend/v/cron/proactive.py) 把每条主动消息记到 `proactive_log:{ch}:{u}` 列表，但 `on_session_start` 还没接 drainer——客户下次回复时，AI 看不到刚才系统主动推过什么。
-
-**当前规避**：客户在 IM 客户端能看到主动消息，对话上下文靠人脑桥接。
-
-**建议**：on_session_start 增加：
-
-```python
-proactive = await redis.lrange(f"proactive_log:{ch}:{u}", 0, -1)
-if proactive:
-    state["messages"].extend(AIMessage(content=...) for each)
-    await redis.delete(...)
-```
+主动触达（物流通知、复购推送等）在当前版本已删除（cron/ARQ 层全部移除），`proactive_log` 机制随之搁置。待主动触达功能正式规划时再重新设计。
 
 ### ~~1.15 MCPServerConfig.api_key 是明文 env 字符串~~（已移除）
 

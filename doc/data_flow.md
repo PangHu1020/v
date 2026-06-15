@@ -161,21 +161,31 @@ sends["wecom_aibot"](user_id, text)
     on message → WecomAibotClient.send_text(WS frame)
 ```
 
-## 3. 主动触达（Phase-2 P2）
+## 3. 主动触达（Phase-2 P2，未实现）
 
-ARQ worker 是独立进程（`make cron`）。
+主动触达功能（物流通知、复购推送等）为规划中功能，当前未实现，已删除 cron/ARQ 相关代码。
 
-### 3.1 任务类型
+### 3.1 记忆任务流（已实现，替代原 ARQ 方案）
 
-| 任务 | 触发方式 | 内容 |
-| --- | --- | --- |
-| `notify_logistics_delivered(channel, user_id, order_id, tracking_number, courier?)` | 上游业务系统 enqueue | 模板化「订单已签收 + 运单号」 |
-| `push_ad(channel, user_id, text)` | 营销系统 enqueue（已准备好的文案） | 直接转发 |
-| `_scheduled_repurchase_run` | cron 每天 09:30 | 扫 `dw.fact_order` ⨝ `agent.user_profile` 找 7-30 天前买消耗品的客户 |
-| `consolidate_session(session_id)` | 由 hooks 提交（context 阈值 / TTL 临近 / on_session_end） | LLM 总结一次会话 → 写 `agent.session_memory` |
-| `extract_session_memory(session_id)` | `consolidate_session` 完成后链式提交 | 总结 → 结构化输出 → upsert `agent.user_profile` + 向量化插入 `agent.memory_episodes` |
+记忆提取/固化/巩固原设计为 ARQ 后台任务，现已改为**可靠的 Redis Streams 任务流**，由
+[backend/app/bus/memory_bus.py](../backend/app/bus/memory_bus.py) 实现。
 
-### 3.2 主动投递公共流程
+**三条专用流**（单一全局，非分片）：
+
+| 流 | 生产者 | 消费者 | 触发时机 |
+|---|---|---|---|
+| `memory:promote` | `enqueue_promote(redis, session_id)` | `MemoryConsumer` | 新 session mint（上一个 session 过期时） |
+| `memory:consolidate` | `enqueue_consolidate(redis, channel, user_id)` | `MemoryConsumer` | 同上（客户回访时懒触发月度巩固） |
+| `memory:extract` | `IdleWatcher` 自动入队 | `MemoryConsumer` | 会话空闲 5min（预提取到 working memory） |
+
+**消费方式**：`MemoryConsumer` 使用 XREADGROUP consumer group `memory_workers`，count=1 严格串行，
+失败写 DLQ（`memory:dlq`）后 XACK，进程重启后 PEL 中未 ACK 的任务自动重投。
+
+**空闲检测**：`IdleWatcher` 每 60s 扫描 Redis sorted set `memory:idle_watch`（每轮 turn 后
+`mark_turn_active` 以当前时间戳 ZADD），找出 5min 未活动的 session 入队 `memory:extract`，
+预提取历史消息到 working memory，让 session-end promotion 得到更丰富的输入。
+
+### 3.2 主动投递公共流程（规划中）
 
 任意主动消息（物流通知 / 广告 / 复购）都走 `deliver_proactive`：
 
@@ -367,28 +377,37 @@ async def search(query: str, top_k: int = 5, source_type: str | None = None) -> 
 
 ```
 T0        客户首条消息 → mint session_id → on_session_start (profile + recent_events 注入)
-T0+30s    agent 调工具、回复 → working memory 无感写入 Redis (暂不触发提取)
-T0+5min   第 15 轮对话 → messages 数达阈值 30 → on_context_threshold hook
-              → enqueue consolidate_session(session_id, defer_by=0)
-T0+5min+2s ARQ worker 执行 consolidate_session:
-              - LLM 总结前 15 轮 → working_memories (3 条) + event_memories (1 条)
-              - Redis RPUSH working:{s_id} × 3
-              - PG INSERT agent.event_memory × 1 (embed + expires_at=now()+30d)
-              - UPDATE session status='consolidated'
-T0+10min  继续对话，working memory 累积到 5 条（3 条来自上次提取 + 2 条新增）
-T0+30min  客户静默，Redis ckpt + working 键自然过期（TTL 1800s）
-T0+35min  外部 closer 检测到 session 已 consolidated 且过期
-              → enqueue extract_session_memory(session_id)
-T0+35min+3s ARQ worker 执行 promote_to_long_term:
-              - 读 Redis working:{s_id}（5 条）+ PG existing profile
-              - LLM 合并决策 → profile_updates (dw_customer_id, preferred_courier 更新)
-                             → event_memories (1 条额外长期记忆)
-              - UPSERT agent.user_profile
-              - INSERT agent.event_memory × 1
-              - DEL Redis working:{s_id}（清理完毕）
+T0+30s    agent 调工具、回复 → compression_node 检查 token 数
+T0+5min   [IdleWatcher 检测到 5min 无新消息]
+              → XADD memory:extract {session_id, channel, user_id}
+              → MemoryConsumer 消费 → _extract_to_working:
+                  读 checkpoint 消息 → memory_extract LLM → 写 working:{s_id}（预提取）
+T0+Xmin   token 阈值触发 compression_node（如果会话足够长）:
+              → LLM 抽取 conversation_state + working/event 句子 → fold 进 working:{s_id}
+              → 截断 head 消息，注入 <compressed_history>
+T0+30min  客户静默，session TTL 倒计时中
+T0+30min  新消息到达（或新客户消息触发 session mint）:
+              minted=True → 旧 session 过期
+              → await enqueue_promote(redis, session_id=prev_session_id)
+                  XADD memory:promote {session_id}
+              → await enqueue_consolidate(redis, channel=..., user_id=...)
+                  XADD memory:consolidate {channel, user_id}
+T0+30min+Δ MemoryConsumer 消费 memory:promote:
+              → _promote_prev_session → promote_to_long_term:
+                  读 working:{s_id}（5 条预提取 + 压缩句子）
+                  → 一次 memory_extract LLM → MemoryExtraction
+                  → policy_gate（重要性下限 + PII 脱敏）
+                  → user_memory 双时态 upsert（key 冲突 supersede）
+                  → episodic insert（tier=raw, embed + cosine 去重）
+                  → 重建 user_profile 缓存 → DEL working:{s_id}
+              → XACK（幂等：working memory 已删，重跑无副作用）
+T0+30min+Δ MemoryConsumer 消费 memory:consolidate（背景，不影响对话）:
+              → _consolidate_user_memory → consolidate_user:
+                  扫已封闭月份 raw 情节 → 按 subject 成簇 → LLM 月度摘要
+                  → 按 ACT-R 激活值删低价值 raw
 T0+60min  客户再次发消息 → mint 新 session_id
-              → on_session_start 读到刚才更新的 profile + 前面写入的 2 条 event_memory
-              → LangGraph 继承了上一会话的"记忆"，但 working memory 是全新的空列表
+              → on_session_start 读到刚才更新的 user_profile + 新 event_memory
+              → agent 继承了上一会话的"记忆"，working memory 全新空列表
 ```
 
 ### 7.5 设计权衡
