@@ -10,10 +10,16 @@ from typing import Any
 from fastapi import FastAPI
 
 from backend.app.bus.consumer import BusConsumer
+from backend.app.bus.memory_bus import IdleWatcher, MemoryConsumer
 from backend.app.bus.messages import SystemMessage
 from backend.app.bus.producer import BusProducer
 from backend.app.bus.shard import RedisStreamShard
-from backend.app.bus.worker import make_bus_handler
+from backend.app.bus.worker import (
+    _consolidate_user_memory,
+    _extract_to_working,
+    _promote_prev_session,
+    make_bus_handler,
+)
 from backend.app.gateway.middleware import RequestIdMiddleware
 from backend.app.gateway.routers import health
 from backend.app.store import close_client, close_pool, create_client, create_pool
@@ -114,6 +120,50 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     consumer_task = asyncio.create_task(consumer.run(handler))
 
+    # Memory-task consumers — durable replacements for the old fire-and-forget
+    # asyncio.create_task calls in the bus worker.
+    _ttl = settings.memory.working_ttl_seconds
+
+    async def _promote_handler(fields: dict) -> None:
+        await _promote_prev_session(
+            fields["session_id"],
+            pool=pg_pool,
+            redis=redis,
+            llm_caller=llm_caller,
+            embedder=embedder,
+            checkpointer=redis_ckpt,
+            settings=settings,
+        )
+
+    async def _consolidate_handler(fields: dict) -> None:
+        await _consolidate_user_memory(
+            channel=fields["channel"],
+            channel_user_id=fields["user_id"],
+            pool=pg_pool,
+            llm_caller=llm_caller,
+            embedder=embedder,
+            settings=settings,
+        )
+
+    async def _extract_handler(fields: dict) -> None:
+        await _extract_to_working(
+            fields["session_id"],
+            redis=redis,
+            llm_caller=llm_caller,
+            checkpointer=redis_ckpt,
+            cache_ttl_seconds=_ttl,
+        )
+
+    mem_consumer = MemoryConsumer(
+        redis,
+        promote_handler=_promote_handler,
+        consolidate_handler=_consolidate_handler,
+        extract_handler=_extract_handler,
+    )
+    idle_watcher = IdleWatcher(redis)
+    mem_consumer_task = asyncio.create_task(mem_consumer.run())
+    idle_watcher_task = asyncio.create_task(idle_watcher.run())
+
     app.state.settings = settings
     app.state.pg_pool = pg_pool
     app.state.redis = redis
@@ -130,11 +180,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         _log.info("app.shutdown")
         await consumer.stop()
-        consumer_task.cancel()
-        try:
-            await consumer_task
-        except asyncio.CancelledError:
-            pass
+        await mem_consumer.stop()
+        await idle_watcher.stop()
+        for t in (consumer_task, mem_consumer_task, idle_watcher_task):
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
         if mcp_registry is not None:
             await mcp_registry.aclose()
         await close_client(redis)

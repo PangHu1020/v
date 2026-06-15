@@ -12,6 +12,7 @@ import asyncpg
 import redis.asyncio as redis_async
 from langchain_core.messages import AIMessage, HumanMessage
 
+from backend.app.bus.memory_bus import enqueue_consolidate, enqueue_promote, mark_turn_active
 from backend.app.bus.messages import SystemMessage
 from backend.v.agents.state import CustomerServiceState
 from backend.v.hooks.session import on_session_start
@@ -161,29 +162,76 @@ async def _consolidate_user_memory(
     embedder: Any,
     settings: Any = None,
 ) -> None:
-    """Fire-and-forget: lazily consolidate a returning customer's old episodes.
-
-    Triggered when the customer starts a new session. Bounds episodic-memory
-    growth by summarising closed-month per-subject clusters and pruning
-    low-activation raws (see ``backend.v.memory.consolidation``).
-    """
+    """Lazily consolidate a returning customer's old episodic clusters."""
     try:
         from backend.v.memory.consolidation import consolidate_user
 
-        ctx = {
-            "pool": pool,
-            "llm_caller": llm_caller,
-            "embedder": embedder,
-            "settings": settings,
-        }
+        ctx = {"pool": pool, "llm_caller": llm_caller, "embedder": embedder, "settings": settings}
         result = await consolidate_user(ctx, channel=channel, channel_user_id=channel_user_id)
         if result:
             _log.info("bus.worker.consolidated", channel=channel, result=result)
     except Exception as exc:
+        _log.error("bus.worker.consolidate_failed", channel=channel, error=type(exc).__name__)
+
+
+async def _extract_to_working(
+    session_id: str,
+    *,
+    redis: redis_async.Redis,
+    llm_caller: Any,
+    checkpointer: Any,
+    cache_ttl_seconds: int = 1800,
+) -> None:
+    """Idle-triggered extraction: pre-populate working memory from checkpoint.
+
+    Runs only when compression_node hasn't fired yet (working memory empty).
+    Uses the mid-session extraction prompt so session-end promotion inherits
+    richer working-memory content even for short sessions.
+    """
+    try:
+        from backend.v.memory.working import append_working_memory, read_working_memory
+
+        if await read_working_memory(redis, session_id=session_id):
+            return  # compression_node already populated it
+
+        if not checkpointer:
+            return
+        ckpt = await checkpointer.aget_tuple({"configurable": {"thread_id": session_id}})
+        if not ckpt:
+            return
+        msgs = ckpt.checkpoint.get("channel_values", {}).get("messages", [])
+
+        from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
+        lines = []
+        for m in msgs:
+            if isinstance(m, HumanMessage):
+                lines.append(f"客户：{m.content}")
+            elif isinstance(m, AIMessage) and not getattr(m, "tool_calls", None):
+                lines.append(f"助理：{m.content}")
+        if not lines:
+            return
+
+        from backend.v.memory.prompts import MID_SESSION_EXTRACTION_SYSTEM_PROMPT
+        from backend.v.memory.types import ExtractionResult
+
+        prompt = [
+            SystemMessage(content=MID_SESSION_EXTRACTION_SYSTEM_PROMPT),
+            HumanMessage(content=f"<conversation>\n{chr(10).join(lines)}\n</conversation>"),
+        ]
+        result = await llm_caller.chat("memory_extract", prompt, structured=ExtractionResult)
+        extracted = (
+            result.parsed if isinstance(result.parsed, ExtractionResult) else ExtractionResult()
+        )
+        entries = [*extracted.working_memories, *extracted.event_memories]
+        if entries:
+            await append_working_memory(
+                redis, session_id=session_id, entries=entries, ttl_seconds=cache_ttl_seconds
+            )
+            _log.info("bus.worker.idle_extracted", session_id=session_id, count=len(entries))
+    except Exception as exc:
         _log.error(
-            "bus.worker.consolidate_failed",
-            channel=channel,
-            error=type(exc).__name__,
+            "bus.worker.idle_extract_failed", session_id=session_id, error=type(exc).__name__
         )
 
 
@@ -221,32 +269,11 @@ def make_bus_handler(
                     channel=msg.channel,
                     channel_user_id=msg.channel_user_id,
                 )
-                # Previous session just expired — promote its working memory to
-                # long-term storage (fire-and-forget; don't block the new turn).
-                if prev_session_id and llm_caller and embedder:
-                    asyncio.create_task(  # noqa: RUF006  fire-and-forget by design
-                        _promote_prev_session(
-                            prev_session_id,
-                            pool=pool,
-                            redis=redis,
-                            llm_caller=llm_caller,
-                            embedder=embedder,
-                            settings=settings,
-                        )
-                    )
-                # Returning customer — lazily consolidate their closed-month
-                # episodic memory (fire-and-forget; bounds episodic growth).
-                if llm_caller and embedder:
-                    asyncio.create_task(  # noqa: RUF006  fire-and-forget by design
-                        _consolidate_user_memory(
-                            channel=msg.channel,
-                            channel_user_id=msg.channel_user_id,
-                            pool=pool,
-                            llm_caller=llm_caller,
-                            embedder=embedder,
-                            settings=settings,
-                        )
-                    )
+                # Previous session expired — enqueue durable promotion.
+                if prev_session_id:
+                    await enqueue_promote(redis, session_id=prev_session_id)
+                # Enqueue lazy monthly consolidation for this customer.
+                await enqueue_consolidate(redis, channel=msg.channel, user_id=msg.channel_user_id)
             with bind_request(session_id=session_id):
                 turn_started = time.perf_counter()
 
@@ -331,6 +358,12 @@ def make_bus_handler(
                     channel=msg.channel,
                     channel_user_id=msg.channel_user_id,
                     silence_seconds=silence_seconds,
+                )
+                await mark_turn_active(
+                    redis,
+                    session_id=session_id,
+                    channel=msg.channel,
+                    user_id=msg.channel_user_id,
                 )
                 _log.info(
                     "bus.worker.turn_complete",
