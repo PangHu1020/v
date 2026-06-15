@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 
 from backend.v.agents.prompts import (
     INTENT_CLARIFY_DIRECTIVE,
+    INTENT_MIX_DIRECTIVE,
     INTENT_SYSTEM_PROMPT,
     REFLECTION_SYSTEM_PROMPT,
 )
@@ -188,6 +189,11 @@ async def intent_node(
         scores=scores,
         elapsed_ms=int((time.perf_counter() - started) * 1000),
     )
+    if routing["is_mix"]:
+        base["intent_directive"] = INTENT_MIX_DIRECTIVE.format(
+            top1_cn=_INTENT_CN.get(routing["intent"], routing["intent"]),
+            top2_cn=_INTENT_CN.get(routing["secondary_intent"], routing["secondary_intent"]),
+        )
     return {**base, **routing, "intent_scores": scores}
 
 

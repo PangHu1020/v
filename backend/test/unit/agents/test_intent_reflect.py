@@ -69,6 +69,19 @@ class TestIntentNode:
         out = await intent_node(state, {"configurable": {"llm_caller": caller}})
         assert out["is_mix"] is True
         assert out["needs_reflection"] is True
+        # Mix sets a CoT task-decomposition directive for the agent.
+        assert "拆解" in out["intent_directive"]
+        assert "退款售后" in out["intent_directive"]
+        assert "物流查询" in out["intent_directive"]
+
+    async def test_single_intent_no_directive(self) -> None:
+        caller = _intent_llm({"refund": 0.9, "general": 0.05})
+        out = await intent_node(
+            {"messages": [HumanMessage(content="我要退款")]},
+            {"configurable": {"llm_caller": caller}},
+        )
+        assert out["is_mix"] is False
+        assert out["intent_directive"] == ""
 
     async def test_ambiguous_sets_clarify(self) -> None:
         caller = _intent_llm({"refund": 0.5, "complaint": 0.3})
