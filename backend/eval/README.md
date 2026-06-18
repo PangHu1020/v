@@ -181,3 +181,33 @@ E2E 延迟（mean/p50/p95/p99）+ token 消耗 + 成本估算（¥/轮）。
 uv run python -m backend.eval.system.run_system_eval
 uv run python -m backend.eval.system.run_system_eval --limit 50
 ```
+
+## 对话式商品检索评测（`conversational/`）
+
+单轮 QA（上面那套）有个根本局限：每条 query 自带完整锚点，检索想错都难（hit@5≈0.98 是数据太干净，不是检索强）。真实客户是**多轮、口语化、信息挤牙膏、夹带情绪/跑题**的，而且"三千左右拍照好的手机"这种宽泛诉求有**多个正确商品**。
+
+这套评测端到端测**对话驱动的商品检索**：
+
+- **LLM user simulator** 扮客户（`user_sim.py`），按 persona（预算紧/急性子/不懂行/带怨气/送礼/惜字如金/话痨/反复改主意）碎片化吐露需求 + 夹噪声。
+- **真跑 graph**：每轮 `graph.ainvoke`，agent 自己从多轮上下文构造 query → 检索。同时考"能力A（上下文 query 构造）+ 能力B（检索匹配）"。
+- **any-of 多 gold**：gold 集由**结构化约束可判定枚举**（category + price-band，代码扫 `products.jsonl`，完备不漏标）。对话过程中 agent 任一轮 `search` 检索到 gold 集任一商品即 pass。
+- **判定**：从对话轨迹所有 ToolMessage 正则提取 `[product:Pxxx]` 标记 → 与 gold 求交。
+
+| 项目 | 数值 |
+|------|------|
+| 数据集 | `data/conv_cases.jsonl`，约束枚举生成（`gen_conv_cases.py`） |
+| case 数 | 30（6 品类 × 5 价格带，每带 1 persona） |
+| gold 集大小 | 4-6（any-of，约束完备枚举） |
+| persona | 8 种（budget_tight / in_a_hurry / clueless / frustrated / gifting / terse / rambler / wishy_washy） |
+| 对话轮数 | ≤6 轮/case（user_sim 觉得满足或达上限即止） |
+
+```bash
+# 生成数据集（离线，只读 products.jsonl + LLM 造句，~30 次调用）
+uv run python -m backend.eval.conversational.gen_conv_cases --per-constraint 1
+
+# 跑评测（需 Milvus 在线；真跑 graph，每 case 多轮 LLM）
+uv run python -m backend.eval.conversational.run_conv_eval
+uv run python -m backend.eval.conversational.run_conv_eval --limit 2   # smoke
+```
+
+报告：hit 率、平均轮数、按 persona/category 分桶、未命中 case 的完整轨迹存档供人工 debug。
