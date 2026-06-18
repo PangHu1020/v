@@ -16,6 +16,9 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from backend.eval.conversational.cases import ConvCase
+from backend.v.utils.logging import get_logger
+
+_log = get_logger("eval.user_sim")
 
 _PERSONA_STYLE = {
     "budget_tight": "反复强调预算，追问价格，对比性价比，语气紧张。",
@@ -92,8 +95,18 @@ async def simulate_user(
     user_prompt += "</对话历史>\n\n生成客户下一句话："
 
     messages = [SystemMessage(content=_SYS), HumanMessage(content=user_prompt)]
-    res = await llm.chat("main_primary", messages, structured=_SimOutput)
-    parsed: _SimOutput = res.parsed
+    try:
+        res = await llm.chat("main_primary", messages, structured=_SimOutput)
+        parsed: _SimOutput | None = res.parsed if isinstance(res.parsed, _SimOutput) else None
+    except Exception as exc:
+        # Structured-output validation can fail when the model returns JSON
+        # that doesn't fit _SimOutput (missing field, bad shape). Don't let
+        # one bad simulator turn kill the whole case — degrade to a generic
+        # continuation so the dialogue (and the retrieval being measured)
+        # proceeds. (Genuine API errors like arrears still propagate from the
+        # agent side, where they should fail the case.)
+        _log.warning("user_sim.parse_failed", error=type(exc).__name__)
+        return "嗯，你看着推荐吧", False
     if not parsed or not parsed.utterance.strip():
         # Fallback: the simulator failed, just say something generic.
         return "嗯...", False
