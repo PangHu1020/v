@@ -94,3 +94,26 @@ class TestTokenErrors:
         respx.post(_TOKEN_URL).mock(side_effect=httpx.ConnectError("down"))
         with pytest.raises(OAuthError, match="token request failed"):
             await ClientCredentialsProvider(_cfg()).token()
+
+
+class TestClientCredentialsAuth:
+    @respx.mock
+    async def test_injects_bearer_into_request(self) -> None:
+        from backend.v.mcp.oauth import ClientCredentialsAuth
+
+        respx.post(_TOKEN_URL).mock(
+            return_value=httpx.Response(200, json={"access_token": "tok-xyz", "expires_in": 3600})
+        )
+        auth = ClientCredentialsAuth(ClientCredentialsProvider(_cfg()))
+        request = httpx.Request("GET", "http://mock/mcp")
+        flow = auth.async_auth_flow(request)
+        sent = await flow.__anext__()
+        assert sent.headers["Authorization"] == "Bearer tok-xyz"
+        await flow.aclose()
+
+    async def test_sync_flow_rejected(self) -> None:
+        from backend.v.mcp.oauth import ClientCredentialsAuth
+
+        auth = ClientCredentialsAuth(ClientCredentialsProvider(_cfg()))
+        with pytest.raises(RuntimeError, match="async-only"):
+            next(auth.sync_auth_flow(httpx.Request("GET", "http://mock/mcp")))

@@ -1,88 +1,51 @@
-"""MCP server registry + LangChain tool wrapper.
+"""MCP registry: builds the agent's MCP tools via langchain-mcp-adapters.
 
-The registry owns the per-server :class:`MCPClient` lifecycle and exposes
-their tools to the agent as a flat list of :class:`StructuredTool`.
+Replaces the hand-rolled per-server ``MCPClient`` + manual JSON-schema→Pydantic
+tool wrapping. ``MultiServerMCPClient`` owns connection/session management and
+converts every server's tools to LangChain tools in one flat list
+(``get_tools()``), with built-in ``{server}_{tool}`` prefixing for
+collision-free names.
 
-Tool naming: ``{server_id}__{tool_name}`` so the same tool name can come
-from multiple servers without colliding (e.g., ``products__search`` and
-``ads__search``). The agent sees each tool by its prefixed name.
+Two cross-cutting concerns we keep from the old implementation are layered in
+without touching the conversion:
 
-Caching: results of non-write tools go through :class:`MCPToolCache`.
-A tool is "write-class" if its name appears in the server's
-``write_tools`` config list.
+- **Caching + write-opt-out** via :class:`CachingInterceptor` (a
+  ``ToolCallInterceptor``): non-write tool results are served from
+  :class:`MCPToolCache`; a cache hit short-circuits the handler. Write-class
+  tools (per-server ``write_tools``) never cache.
+- **OAuth** via :class:`backend.v.mcp.oauth.ClientCredentialsAuth` passed as the
+  connection's ``httpx.Auth`` (token fetch + refresh transparent to the adapter).
+
+Note: ``get_tools()`` opens a fresh session per tool call — fine for HTTP,
+heavier for stdio (subprocess per call). Acceptable given HTTP is the primary
+transport.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 from typing import Any
 
-from langchain_core.tools import StructuredTool
+from langchain_core.tools import BaseTool
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.interceptors import MCPToolCallRequest, MCPToolCallResult
 from mcp.types import CallToolResult, TextContent
-from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from backend.v.mcp.cache import MCPToolCache
-from backend.v.mcp.client import MCPClient, MCPClientError
 from backend.v.mcp.config import MCPServerConfig
+from backend.v.mcp.oauth import ClientCredentialsAuth, ClientCredentialsProvider
 from backend.v.utils.logging import bind_request, get_logger
 
 _log = get_logger("mcp.registry")
 
-_JSON_TYPE_TO_PY: dict[str, type] = {
-    "string": str,
-    "integer": int,
-    "number": float,
-    "boolean": bool,
-    "array": list,
-    "object": dict,
-}
-
-
-def _python_type_for(prop: dict[str, Any]) -> type:
-    """Map a JSON-schema ``type`` to a Python annotation. Falls back to ``str``."""
-    json_type = prop.get("type", "string")
-    if isinstance(json_type, list):
-        # Take the first non-null type for a union of simple types.
-        json_type = next((t for t in json_type if t != "null"), "string")
-    return _JSON_TYPE_TO_PY.get(json_type, str)
-
-
-def _build_args_model(tool_name: str, input_schema: dict[str, Any] | None) -> type[BaseModel]:
-    """Build a Pydantic model that mirrors the tool's JSON-schema input.
-
-    Best-effort; nested objects and constrained types fall back to plain
-    ``str`` / ``dict``. The LLM still sees a correct top-level JSON schema
-    via LangChain's tool binding because ``StructuredTool`` re-emits it.
-    """
-    if not input_schema:
-        return create_model(  # type: ignore[call-overload]
-            f"{tool_name}_Args",
-            __config__=ConfigDict(extra="allow"),
-        )
-    props = input_schema.get("properties") or {}
-    required = set(input_schema.get("required") or [])
-    fields: dict[str, tuple[Any, Any]] = {}
-    for key, prop in props.items():
-        py_type = _python_type_for(prop)
-        description = prop.get("description", "")
-        if key in required:
-            fields[key] = (py_type, Field(..., description=description))
-        else:
-            fields[key] = (py_type | None, Field(default=None, description=description))
-    return create_model(  # type: ignore[call-overload]
-        f"{tool_name}_Args",
-        __config__=ConfigDict(extra="allow"),
-        **fields,
-    )
-
 
 def _extract_text(result: CallToolResult) -> str:
-    """Flatten an MCP tool result into a single string the agent can read."""
+    """Flatten an MCP ``CallToolResult`` into a single string."""
     if result.isError:
-        # Surface the error text but don't crash; the agent can decide.
         parts = [c.text for c in result.content if isinstance(c, TextContent)]
         return f"[tool_error] {' '.join(parts) or 'unknown error'}"
-    parts: list[str] = []
+    parts = []
     for c in result.content:
         if isinstance(c, TextContent):
             parts.append(c.text)
@@ -92,8 +55,67 @@ def _extract_text(result: CallToolResult) -> str:
     return "\n".join(parts).strip()
 
 
+class CachingInterceptor:
+    """``ToolCallInterceptor`` that caches non-write tool results.
+
+    Keys on ``(server_name, tool_name, args)`` — ``server_name`` is the
+    connection key (our ``MCPServerConfig.id``) and ``tool_name`` is the raw
+    (unprefixed) MCP tool name, which is what ``write_tools`` lists. A cache hit
+    returns a reconstructed ``CallToolResult`` and skips the handler entirely.
+    """
+
+    def __init__(
+        self, cache: MCPToolCache, write_tools_by_server: dict[str, set[str]]
+    ) -> None:
+        self._cache = cache
+        self._write = write_tools_by_server
+
+    async def __call__(
+        self,
+        request: MCPToolCallRequest,
+        handler: Callable[[MCPToolCallRequest], Awaitable[MCPToolCallResult]],
+    ) -> MCPToolCallResult:
+        server = request.server_name
+        tool = request.name
+        args = request.args or {}
+        is_write = tool in self._write.get(server, set())
+
+        with bind_request(mcp_server=server, mcp_tool=tool):
+            if not is_write:
+                cached = await self._cache.get(
+                    server_id=server, tool_name=tool, arguments=args
+                )
+                if cached is not None:
+                    _log.debug("mcp.registry.cache_hit", server=server, tool=tool)
+                    return CallToolResult(
+                        content=[TextContent(type="text", text=str(cached))],
+                        isError=False,
+                    )
+
+            result = await handler(request)
+
+            # Only cache a successful CallToolResult (handler may also return a
+            # ToolMessage / Command — those pass through uncached).
+            if (
+                not is_write
+                and isinstance(result, CallToolResult)
+                and not result.isError
+            ):
+                text = _extract_text(result)
+                if not text.startswith("[tool_error]"):
+                    await self._cache.put(
+                        server_id=server, tool_name=tool, arguments=args, value=text
+                    )
+            return result
+
+
 class MCPRegistry:
-    """Owns the lifecycle of all configured MCP clients + builds LangChain tools."""
+    """Builds + holds the agent's MCP tools via ``MultiServerMCPClient``.
+
+    Keeps the old public surface (``connect_all`` / ``tools`` / ``aclose``) so
+    the FastAPI lifespan wiring is unchanged, but the internals are now the
+    adapters client + a caching interceptor.
+    """
 
     def __init__(
         self,
@@ -105,98 +127,64 @@ class MCPRegistry:
         self._configs = configs
         self._cache = cache
         self._call_timeout = call_timeout_seconds
-        self._clients: dict[str, MCPClient] = {}
-        self._tools: list[StructuredTool] = []
+        self._client: MultiServerMCPClient | None = None
+        self._providers: list[ClientCredentialsProvider] = []
+        self._tools: list[BaseTool] = []
 
     @property
-    def clients(self) -> dict[str, MCPClient]:
-        return dict(self._clients)
-
-    @property
-    def tools(self) -> list[StructuredTool]:
+    def tools(self) -> list[BaseTool]:
         return list(self._tools)
 
-    async def connect_all(self) -> None:
-        """Connect every configured server and discover its tools."""
+    def _build_connections(self) -> dict[str, dict[str, Any]]:
+        connections: dict[str, dict[str, Any]] = {}
         for cfg in self._configs:
-            client = MCPClient(cfg, call_timeout_seconds=self._call_timeout)
-            try:
-                await client.connect()
-            except Exception as exc:
-                _log.error("mcp.registry.connect_failed", server_id=cfg.id, error=str(exc))
-                continue
-            self._clients[cfg.id] = client
-
-            try:
-                listing = await client.list_tools()
-            except Exception as exc:
-                _log.error(
-                    "mcp.registry.list_tools_failed",
-                    server_id=cfg.id,
-                    error=str(exc),
+            auth = None
+            if cfg.auth_type == "oauth":
+                provider = ClientCredentialsProvider(
+                    cfg, request_timeout=float(self._call_timeout)
                 )
-                continue
-            for mcp_tool in listing.tools:
-                lc_tool = self._build_langchain_tool(client, mcp_tool)
-                self._tools.append(lc_tool)
-                _log.info(
-                    "mcp.registry.tool_registered",
-                    server_id=cfg.id,
-                    tool_name=mcp_tool.name,
-                    qualified=lc_tool.name,
-                )
+                self._providers.append(provider)
+                auth = ClientCredentialsAuth(provider)
+            connections[cfg.id] = cfg.to_connection(auth=auth)
+        return connections
 
-    async def aclose(self) -> None:
-        """Close all clients. Safe to call multiple times."""
-        for cid, client in list(self._clients.items()):
-            try:
-                await client.aclose()
-            except Exception as exc:
-                _log.warning("mcp.registry.close_error", server_id=cid, error=str(exc))
-        self._clients.clear()
-
-    def _build_langchain_tool(self, client: MCPClient, mcp_tool: Any) -> StructuredTool:
-        cfg = client.config
-        qualified_name = f"{cfg.id}__{mcp_tool.name}"
-        is_write = mcp_tool.name in set(cfg.write_tools)
-        args_schema = _build_args_model(qualified_name, mcp_tool.inputSchema)
-
-        async def _run(**kwargs: Any) -> str:
-            with bind_request(mcp_server=cfg.id, mcp_tool=mcp_tool.name):
-                if not is_write:
-                    cached = await self._cache.get(
-                        server_id=cfg.id,
-                        tool_name=mcp_tool.name,
-                        arguments=kwargs,
-                    )
-                    if cached is not None:
-                        return str(cached)
-                try:
-                    result = await client.call_tool(mcp_tool.name, kwargs)
-                except MCPClientError as exc:
-                    return f"[tool_error] {exc}"
-                text = _extract_text(result)
-                if not is_write and not text.startswith("[tool_error]"):
-                    await self._cache.put(
-                        server_id=cfg.id,
-                        tool_name=mcp_tool.name,
-                        arguments=kwargs,
-                        value=text,
-                    )
-                return text
-
-        description = mcp_tool.description or f"MCP tool {mcp_tool.name} on {cfg.id}"
-        return StructuredTool.from_function(
-            coroutine=_run,
-            name=qualified_name,
-            description=description,
-            args_schema=args_schema,
+    async def connect_all(self) -> None:
+        """Build the multi-server client and load all tools (flat list)."""
+        if not self._configs:
+            return
+        write_by_server = {
+            cfg.id: set(cfg.write_tools) for cfg in self._configs if cfg.write_tools
+        }
+        interceptor = CachingInterceptor(self._cache, write_by_server)
+        self._client = MultiServerMCPClient(
+            self._build_connections(),
+            tool_interceptors=[interceptor],
+            tool_name_prefix=True,
+        )
+        try:
+            self._tools = await self._client.get_tools()
+        except Exception as exc:
+            _log.error("mcp.registry.get_tools_failed", error=str(exc))
+            self._tools = []
+            return
+        _log.info(
+            "mcp.registry.ready",
+            servers=len(self._configs),
+            tools=len(self._tools),
         )
 
+    async def aclose(self) -> None:
+        """No persistent sessions to close (get_tools opens per-call sessions)."""
+        self._client = None
+        self._providers.clear()
 
-def serialize_tool_for_audit(tool: StructuredTool) -> str:
+
+def serialize_tool_for_audit(tool: BaseTool) -> str:
     """Helper used by tests / debugging to confirm a tool's surface."""
-    schema = tool.args_schema.model_json_schema() if tool.args_schema else {}
+    schema = tool.args_schema if isinstance(tool.args_schema, dict) else {}
+    if not schema and tool.args_schema is not None:
+        getter = getattr(tool.args_schema, "model_json_schema", None)
+        schema = getter() if callable(getter) else {}
     return json.dumps(
         {"name": tool.name, "description": tool.description, "schema": schema},
         ensure_ascii=False,

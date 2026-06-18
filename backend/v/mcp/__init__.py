@@ -1,28 +1,28 @@
 """Model Context Protocol client.
 
-Connects to one or more MCP servers (stdio or HTTP/SSE), exposes their
-tools to the agent, and caches non-write-class results.
+Connects to one or more MCP servers (stdio or HTTP/SSE) via
+``langchain-mcp-adapters``, exposes their tools to the agent as one flat list,
+and caches non-write-class results.
 
 Layout:
 
-- :mod:`config`   — ``MCPServerConfig`` schema + JSON parser.
-- :mod:`oauth`    — ``ClientCredentialsProvider`` M2M token provider.
-- :mod:`client`   — ``MCPClient`` long-lived connection wrapper.
+- :mod:`config`   — ``MCPServerConfig`` schema + JSON parser + connection mapping.
+- :mod:`oauth`    — ``ClientCredentialsProvider`` M2M token provider +
+  ``ClientCredentialsAuth`` (``httpx.Auth`` adapter for the connections).
 - :mod:`cache`    — L1 in-memory + L2 Redis cache for tool results.
-- :mod:`registry` — load servers from settings, manage their lifecycle,
-  hand back LangChain ``StructuredTool`` instances for the agent.
+- :mod:`registry` — builds tools via ``MultiServerMCPClient`` + a
+  ``CachingInterceptor``; hands back LangChain tools for the agent.
 """
 
 from backend.v.mcp.cache import MCPToolCache
-from backend.v.mcp.client import MCPClient, MCPClientError
 from backend.v.mcp.config import MCPServerConfig, parse_servers
-from backend.v.mcp.oauth import ClientCredentialsProvider, OAuthError
-from backend.v.mcp.registry import MCPRegistry
+from backend.v.mcp.oauth import ClientCredentialsAuth, ClientCredentialsProvider, OAuthError
+from backend.v.mcp.registry import CachingInterceptor, MCPRegistry
 
 __all__ = [
+    "CachingInterceptor",
+    "ClientCredentialsAuth",
     "ClientCredentialsProvider",
-    "MCPClient",
-    "MCPClientError",
     "MCPRegistry",
     "MCPServerConfig",
     "MCPToolCache",

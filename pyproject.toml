@@ -20,6 +20,7 @@ dependencies = [
     "langgraph-checkpoint-postgres>=2.0,<3.0",
     "slack-sdk>=3.36",
     "mcp>=1.0",
+    "langchain-mcp-adapters>=0.3.0",
     "arq>=0.26",
     "structlog>=24.0",
     "tenacity>=9.0",

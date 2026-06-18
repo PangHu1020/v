@@ -68,6 +68,32 @@ class MCPServerConfig(BaseModel):
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
+    def to_connection(self, *, auth: object | None = None) -> dict[str, object]:
+        """Map this config to a ``langchain-mcp-adapters`` connection dict.
+
+        ``transport="http"`` maps to the adapters' ``"streamable_http"``.
+        For HTTP/SSE, static headers (extra + api_key) go in ``headers``; the
+        OAuth flow is passed as ``auth`` (an ``httpx.Auth``) by the caller, who
+        owns the provider lifecycle. stdio passes command/args/env through.
+        """
+        if self.transport == "stdio":
+            return {
+                "transport": "stdio",
+                "command": self.command,
+                "args": list(self.args),
+                "env": dict(self.env) or None,
+            }
+        conn: dict[str, object] = {
+            "transport": "streamable_http" if self.transport == "http" else "sse",
+            "url": self.url,
+        }
+        headers = self.static_headers()
+        if headers:
+            conn["headers"] = headers
+        if auth is not None:
+            conn["auth"] = auth
+        return conn
+
 
 def parse_servers(servers_json: str) -> list[MCPServerConfig]:
     """Parse the ``MCP_SERVERS_JSON`` env var into a list of configs.

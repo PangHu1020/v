@@ -87,3 +87,31 @@ class ClientCredentialsProvider:
     async def auth_headers(self) -> dict[str, str]:
         """Return ``{"Authorization": "Bearer <token>"}`` for the current token."""
         return {"Authorization": f"Bearer {await self.token()}"}
+
+
+class ClientCredentialsAuth(httpx.Auth):
+    """``httpx.Auth`` adapter over :class:`ClientCredentialsProvider`.
+
+    Lets the OAuth client_credentials flow plug straight into
+    ``langchain-mcp-adapters`` HTTP/SSE connections (which accept an
+    ``auth: httpx.Auth``). Each outbound request gets a fresh-enough bearer
+    token from the provider (which handles caching + refresh), so token
+    expiry is transparent to the adapter and to the MCP session.
+    """
+
+    requires_request_body = False
+    requires_response_body = False
+
+    def __init__(self, provider: ClientCredentialsProvider) -> None:
+        self._provider = provider
+
+    def sync_auth_flow(self, request):
+        raise RuntimeError(
+            "ClientCredentialsAuth is async-only; MCP transports use async httpx"
+        )
+
+    async def async_auth_flow(self, request):
+        token = await self._provider.token()
+        request.headers["Authorization"] = f"Bearer {token}"
+        yield request
+
