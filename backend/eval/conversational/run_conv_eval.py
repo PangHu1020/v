@@ -150,9 +150,28 @@ async def main() -> None:
     tasks = [_wrapped(i, c) for i, c in enumerate(cases)]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    # Filter exceptions.
+    # Separate valid results from exceptions. Crucially, surface WHY cases
+    # failed — a silent gather(return_exceptions=True) would otherwise report
+    # "0 cases" indistinguishably whether the retriever missed everything or
+    # the LLM API was down (e.g. account arrears returns 400 on every call).
     valid = [r for r in results if isinstance(r, ConvResult)]
-    _log.info("eval.done", valid=len(valid), failed=len(results) - len(valid))
+    failures = [r for r in results if isinstance(r, BaseException)]
+    if failures:
+        from collections import Counter
+
+        kinds = Counter(type(e).__name__ for e in failures)
+        _log.warning("eval.cases_failed", count=len(failures), kinds=dict(kinds))
+        # Print to stdout too so it's visible without log scraping.
+        print(f"\n⚠️  {len(failures)}/{len(results)} cases FAILED (not retrieval misses):")
+        for kind, n in kinds.most_common():
+            sample = next(e for e in failures if type(e).__name__ == kind)
+            print(f"    {kind} ×{n}: {str(sample)[:160]}")
+        if not valid:
+            print(
+                "\n  All cases failed — this is an infrastructure/API error, "
+                "NOT a 0% hit rate. Fix the cause above and re-run."
+            )
+    _log.info("eval.done", valid=len(valid), failed=len(failures))
 
     # Aggregate.
     hit_count = sum(1 for r in valid if r.hit)
