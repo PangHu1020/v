@@ -120,7 +120,22 @@ class ConvResult:
     hit: bool  # retrieved ∩ gold ≠ ∅
     hit_turn: int  # 1-based customer turn where gold first retrieved, 0 if never
     total_turns: int
+    # ── feedback-loop metrics (one graph run yields all of these) ──────────
+    task_completed: bool = False  # LLM-judge: was the customer's need satisfied?
+    task_reason: str = ""  # judge's one-line rationale
+    tool_calls: int = 0  # tool invocations across the dialogue
+    tool_errors: int = 0  # of those, how many returned an error
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    latency_ms: float = 0.0  # wall time for the whole multi-turn case
     transcript: list[dict[str, str]] = field(default_factory=list)  # role/content per turn
+
+    @property
+    def tool_success_rate(self) -> float:
+        """Fraction of tool calls that did NOT error. 1.0 when no calls."""
+        if self.tool_calls == 0:
+            return 1.0
+        return (self.tool_calls - self.tool_errors) / self.tool_calls
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -132,6 +147,14 @@ class ConvResult:
             "hit": self.hit,
             "hit_turn": self.hit_turn,
             "total_turns": self.total_turns,
+            "task_completed": self.task_completed,
+            "task_reason": self.task_reason,
+            "tool_calls": self.tool_calls,
+            "tool_errors": self.tool_errors,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.prompt_tokens + self.completion_tokens,
+            "latency_ms": round(self.latency_ms, 1),
             "transcript": self.transcript,
         }
 

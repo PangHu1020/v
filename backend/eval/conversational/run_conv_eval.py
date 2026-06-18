@@ -14,13 +14,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import time
 from pathlib import Path
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
 
-from backend.eval.common import get_embedder, get_llm_caller
+from backend.eval.common import TokenCounter, get_embedder, get_llm_caller
 from backend.eval.conversational.cases import ConvResult, load_conv_cases
+from backend.eval.conversational.judge import judge_task_completion
 from backend.eval.conversational.scoring import extract_retrieved_ids, score_hit
 from backend.eval.conversational.user_sim import simulate_user
 from backend.v.agents.graph import build_graph
@@ -41,6 +43,7 @@ async def _eval_one(
     tool_outputs: list[str] = []
     hit_turn = 0
 
+    counter = TokenCounter()
     config = {
         "configurable": {
             "thread_id": thread_id,
@@ -50,8 +53,10 @@ async def _eval_one(
             # paraphrases as a system error and hallucinates products).
             "embedder": embedder,
             "settings": settings,
-        }
+        },
+        "callbacks": [counter],  # tallies tokens across every LLM call this case
     }
+    t0 = time.perf_counter()
 
     for turn in range(1, case.max_turns + 1):
         # User simulator generates the next customer utterance.
@@ -96,8 +101,14 @@ async def _eval_one(
             break
 
     # Final scoring.
+    latency_ms = (time.perf_counter() - t0) * 1000
     all_retrieved = extract_retrieved_ids(tool_outputs, source_type="product")
     hit = score_hit(all_retrieved, case.gold_source_ids)
+    tool_calls = len(tool_outputs)
+    tool_errors = sum(
+        1 for o in tool_outputs if o.lstrip().startswith(("[tool_error]", "[tool_guard]"))
+    )
+    completed, reason = await judge_task_completion(llm, case=case, transcript=transcript)
     return ConvResult(
         case_id=case.case_id,
         persona=case.persona,
@@ -107,6 +118,13 @@ async def _eval_one(
         hit=hit,
         hit_turn=hit_turn,
         total_turns=len([t for t in transcript if t["role"] == "user"]),
+        task_completed=completed,
+        task_reason=reason,
+        tool_calls=tool_calls,
+        tool_errors=tool_errors,
+        prompt_tokens=counter.prompt_tokens,
+        completion_tokens=counter.completion_tokens,
+        latency_ms=latency_ms,
         transcript=transcript,
     )
 
@@ -174,12 +192,26 @@ async def main() -> None:
     _log.info("eval.done", valid=len(valid), failed=len(failures))
 
     # Aggregate.
+    n = len(valid)
     hit_count = sum(1 for r in valid if r.hit)
-    hit_rate = hit_count / len(valid) if valid else 0.0
-    avg_turns = sum(r.total_turns for r in valid) / len(valid) if valid else 0.0
+    hit_rate = hit_count / n if valid else 0.0
+    avg_turns = sum(r.total_turns for r in valid) / n if valid else 0.0
     avg_hit_turn = (
         sum(r.hit_turn for r in valid if r.hit_turn > 0) / hit_count if hit_count else 0.0
     )
+    # Feedback-loop metrics.
+    completed_count = sum(1 for r in valid if r.task_completed)
+    task_rate = completed_count / n if valid else 0.0
+    total_tool_calls = sum(r.tool_calls for r in valid)
+    total_tool_errors = sum(r.tool_errors for r in valid)
+    tool_success = (
+        (total_tool_calls - total_tool_errors) / total_tool_calls if total_tool_calls else 1.0
+    )
+    avg_total_tokens = (
+        sum(r.prompt_tokens + r.completion_tokens for r in valid) / n if valid else 0.0
+    )
+    latencies = sorted(r.latency_ms for r in valid)
+    p95 = latencies[int(n * 0.95)] if valid else 0.0
 
     # By persona / category.
     from collections import Counter
@@ -188,23 +220,28 @@ async def main() -> None:
     by_cat = Counter(r.category for r in valid)
     persona_hits = {p: sum(1 for r in valid if r.persona == p and r.hit) for p in by_persona}
     cat_hits = {c: sum(1 for r in valid if r.category == c and r.hit) for c in by_cat}
+    persona_done = {
+        p: sum(1 for r in valid if r.persona == p and r.task_completed) for p in by_persona
+    }
 
     print(f"\n{'=' * 60}")
-    print(f"Conversational Retrieval Eval — {len(valid)} cases")
+    print(f"Conversational Eval — {len(valid)} cases")
     print(f"{'=' * 60}")
-    print(f"Hit rate (any-of): {hit_rate:.1%} ({hit_count}/{len(valid)})")
-    print(f"Avg turns per case: {avg_turns:.1f}")
-    print(f"Avg hit turn (when hit): {avg_hit_turn:.1f}")
-    print("\nBy persona:")
-    for p in sorted(persona_hits):
-        p_hit = persona_hits[p]
-        p_total = by_persona[p]
-        print(f"  {p:15s}: {p_hit}/{p_total} = {p_hit / p_total:.1%}")
-    print("\nBy category:")
+    print(f"Retrieval hit rate (any-of) : {hit_rate:.1%} ({hit_count}/{n})")
+    print(f"Task completion rate (judge): {task_rate:.1%} ({completed_count}/{n})")
+    tool_ok = total_tool_calls - total_tool_errors
+    print(f"Tool-call success rate      : {tool_success:.1%} ({tool_ok}/{total_tool_calls} calls)")
+    print(f"Avg turns / hit turn        : {avg_turns:.1f} / {avg_hit_turn:.1f}")
+    print(f"Avg tokens per case         : {avg_total_tokens:.0f}")
+    print(f"Latency p95 (whole case)    : {p95:.0f}ms")
+    print("\nBy persona (hit / task-done):")
+    for p in sorted(by_persona):
+        t = by_persona[p]
+        print(f"  {p:15s}: {persona_hits[p]}/{t} hit, {persona_done[p]}/{t} done")
+    print("\nBy category (hit):")
     for c in sorted(cat_hits):
-        c_hit = cat_hits[c]
-        c_total = by_cat[c]
-        print(f"  {c:10s}: {c_hit}/{c_total} = {c_hit / c_total:.1%}")
+        t = by_cat[c]
+        print(f"  {c:10s}: {cat_hits[c]}/{t} = {cat_hits[c] / t:.1%}")
 
     # Dump misses for debug.
     misses = [r for r in valid if not r.hit]

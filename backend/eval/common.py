@@ -23,6 +23,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from langchain_core.callbacks import BaseCallbackHandler
+
 DATA_DIR = Path(__file__).parent / "data"
 PRODUCTS_PATH = DATA_DIR / "products.jsonl"
 FAQ_PATH = DATA_DIR / "faq.jsonl"
@@ -198,3 +200,29 @@ def get_llm_caller() -> Any:
     from backend.v.models.llm_caller import LLMCaller
 
     return LLMCaller(get_settings().llm)
+
+
+class TokenCounter(BaseCallbackHandler):
+    """LangChain callback tallying prompt + completion tokens across a run.
+
+    Attach to ``config["callbacks"]`` of a ``graph.ainvoke`` call to capture
+    token usage for the whole turn (all LLM calls inside the graph). Reads
+    ``generation_info["token_usage"]`` (what the OpenAI-compatible providers
+    emit). Shared by the system + conversational eval harnesses.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
+
+    def on_llm_end(self, response: Any, **kwargs: Any) -> None:
+        for gen_list in response.generations:
+            for gen in gen_list:
+                usage = (getattr(gen, "generation_info", None) or {}).get("token_usage") or {}
+                self.prompt_tokens += usage.get("prompt_tokens", 0)
+                self.completion_tokens += usage.get("completion_tokens", 0)

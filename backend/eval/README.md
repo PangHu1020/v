@@ -176,4 +176,19 @@ uv run python -m backend.eval.conversational.run_conv_eval
 uv run python -m backend.eval.conversational.run_conv_eval --limit 2   # smoke
 ```
 
-报告：hit 率、平均轮数、按 persona/category 分桶、未命中 case 的完整轨迹存档供人工 debug。
+报告（一次 graph 运行同时产出全部反馈指标，按 persona/category 分桶）：
+
+| 指标 | 含义 | 怎么测 |
+|------|------|--------|
+| 检索命中率 hit (any-of) | 多轮中任一 search 是否命中 gold 商品集 | ToolMessage 提取 `[product:Pxxx]` ∩ gold |
+| **任务完成率** | 客户诉求是否被实质满足（非答非所问/悬而未决） | LLM-as-judge（`judge.py`）读 transcript + hidden_need |
+| **工具调用成功率** | 工具调用未报错的比例 | 统计 ToolMessage 中 `[tool_error]`/`[tool_guard]` 前缀 |
+| 轮次 / 命中轮 | 平均对话轮数、首次命中在第几轮 | transcript user 轮计数 |
+| **token 消耗** | 每 case prompt+completion token | `TokenCounter` 回调（与 system eval 共用）挂在 graph callbacks |
+| **延迟 p95** | 整 case 多轮墙钟 | per-case 计时 |
+
+未命中 case 的完整轨迹存档供人工 debug。失败（API/欠费）显式区分于"0 命中"，不静默吞。
+
+> 人工接管率**未纳入**：handoff 机制在项目早期已删除（无 `transfer_to_human` 工具），
+> 没有接管事件可统计。要测得先把 handoff 作为 feature 重建。
+> RAGAS 生成质量是独立的另一轴，见上面的 `generate/`。

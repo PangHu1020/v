@@ -24,11 +24,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import HumanMessage
-from langchain_core.outputs import LLMResult
 
-from backend.eval.common import load_qa
+from backend.eval.common import TokenCounter, load_qa
 from backend.v.agents.graph import build_graph
 from backend.v.configs import get_settings
 from backend.v.models.factory import get_embedding
@@ -48,22 +46,6 @@ PRICE_PER_1M = {
 CONCURRENCY = 4
 
 
-class _TokenCounter(BaseCallbackHandler):
-    """LangChain callback that tallies prompt + completion tokens."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.prompt_tokens = 0
-        self.completion_tokens = 0
-
-    def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
-        for gen_list in response.generations:
-            for gen in gen_list:
-                usage = (getattr(gen, "generation_info", None) or {}).get("token_usage") or {}
-                self.prompt_tokens += usage.get("prompt_tokens", 0)
-                self.completion_tokens += usage.get("completion_tokens", 0)
-
-
 async def _run_one(
     graph: Any,
     embedder: Any,
@@ -72,7 +54,7 @@ async def _run_one(
     session_id: str,
     item,
 ) -> dict[str, Any]:
-    counter = _TokenCounter()
+    counter = TokenCounter()
     config = {
         "configurable": {
             "thread_id": session_id,
