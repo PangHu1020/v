@@ -3,14 +3,13 @@
 Runs the **real** ``KnowledgeRetriever.retrieve()`` (the same code path the
 production ``search`` tool uses) over every item in ``data/qa.jsonl``, against
 the Milvus collection seeded by ``seed_milvus.py``. For each query it records
-the ranked ``source_id`` list and which cascade stage produced it (via the
+the ranked ``source_id`` list and whether the reranker reordered it (via the
 retriever's ``trace`` hook), then reports:
 
 - Overall recall@k / MRR@k / nDCG@k / hit@k.
 - The same metrics broken down by difficulty tier.
 - The same metrics broken down by gold ``source_type`` (product vs faq).
-- Cascade-stage distribution (how often stage-1 dense suffices vs needs
-  hybrid vs needs LLM-rewrite) and per-stage hit@k.
+- How often reranking changed the top-k order.
 - Mean retrieval latency.
 
 Queries run with bounded concurrency. A JSON report is written to
@@ -18,9 +17,9 @@ Queries run with bounded concurrency. A JSON report is written to
 
 Usage::
 
-    uv run python -m backend.eval.run_eval
-    uv run python -m backend.eval.run_eval --limit 50      # quick smoke
-    uv run python -m backend.eval.run_eval --top-k 10
+    uv run python -m backend.eval.retrieval.run_eval
+    uv run python -m backend.eval.retrieval.run_eval --limit 50      # quick smoke
+    uv run python -m backend.eval.retrieval.run_eval --top-k 10
 """
 
 from __future__ import annotations
@@ -81,7 +80,7 @@ async def _eval_one(
         "gold_source_type": item.gold_source_type,
         "gold": item.gold_source_ids,
         "retrieved": [r["source_id"] for r in results],
-        "stage": trace.get("stage", 0),
+        "reranked": bool(trace.get("reranked", False)),
         "latency_ms": latency_ms,
     }
 
@@ -95,10 +94,7 @@ def _report(rows: list[dict[str, Any]], top_k: int) -> dict[str, Any]:
             buckets[str(r[key])].append(r)
         return {name: aggregate(group, KS) for name, group in sorted(buckets.items())}
 
-    stage_counts: dict[int, int] = defaultdict(int)
-    for r in rows:
-        stage_counts[r["stage"]] += 1
-    stage_dist = {f"stage_{s}": stage_counts[s] for s in sorted(stage_counts)}
+    reranked_count = sum(1 for r in rows if r["reranked"])
 
     latencies = sorted(r["latency_ms"] for r in rows)
     n = len(latencies)
@@ -109,10 +105,7 @@ def _report(rows: list[dict[str, Any]], top_k: int) -> dict[str, Any]:
         "by_tier": _group("tier"),
         "by_difficulty": _group("difficulty"),
         "by_source_type": _group("gold_source_type"),
-        "by_stage": {
-            "distribution": stage_dist,
-            "metrics": _group("stage"),
-        },
+        "reranked_queries": reranked_count,
         "latency_ms": {
             "mean": sum(latencies) / n if n else 0.0,
             "p50": latencies[n // 2] if n else 0.0,
@@ -136,7 +129,7 @@ def _print_summary(report: dict[str, Any]) -> None:
     print("\nBY SOURCE_TYPE:")
     for st, m in report["by_source_type"].items():
         print(f"  {st:<16}", _fmt(m))
-    print("\nCASCADE STAGE DISTRIBUTION:", report["by_stage"]["distribution"])
+    print(f"\nRERANKED QUERIES: {report['reranked_queries']}/{report['n_queries']}")
     lat = report["latency_ms"]
     print(f"\nLATENCY ms: mean={lat['mean']:.0f} p50={lat['p50']:.0f} p95={lat['p95']:.0f}")
 

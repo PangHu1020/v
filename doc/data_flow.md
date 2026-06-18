@@ -144,7 +144,7 @@ CLAUDE.md 明确规定：bus 仅 reactive-inbound。直接走 channel adapter �
 | 工具 | 行为 | 实现 |
 | --- | --- | --- |
 | `calculator(expr)` | 安全 AST 求值（白名单算子，exponent ≤ 64） | [tools/calculator.py](../backend/v/tools/calculator.py) |
-| `search(query, top_k=5, source_type=None)` | 语义召回 `agent.knowledge_chunk`（Milvus 三级 cascade：dense → hybrid → LLM 重写，相对 margin 门控）；逻辑在 [rag/retriever.py](../backend/v/rag/retriever.py) | [tools/search.py](../backend/v/tools/search.py) |
+| `search(query, top_k=5, source_type=None)` | 语义召回 `agent.knowledge_chunk`（Milvus 单次 hybrid 检索 dense+BM25 → rerank 精排）；逻辑在 [rag/retriever.py](../backend/v/rag/retriever.py) | [tools/search.py](../backend/v/tools/search.py) |
 | `recall_memory(query, top_k=5)` | 召回该客户的 `agent.event_memory` (pgvector cosine + 时间衰减重排) | [tools/recall_memory.py](../backend/v/tools/recall_memory.py) |
 | `subagent(task, context_mode=...)` | 单轮 LLM 子任务调用；shared 模式带父 messages 末尾 10 条 | [tools/subagent.py](../backend/v/tools/subagent.py) |
 

@@ -69,7 +69,7 @@ backend/
     │   ├── pg_checkpointer.py              open_pg_checkpointer（冷路径，langgraph 官方）
     │   └── checkpointer_migration.py       migrate_hot_to_cold / migrate_cold_to_hot
     ├── rag/                                RAG 检索层
-    │   └── retriever.py                    KnowledgeRetriever（Milvus 三级 cascade：dense → hybrid → LLM-rewrite）
+    │   └── retriever.py                    KnowledgeRetriever（Milvus hybrid 检索 + rerank 精排）
     ├── memory/                             用户级记忆（不含 checkpointer）
     │   ├── working.py                      user_profile 工作记忆缓存
     │   ├── long_term.py                    read_user_profile（PG）
@@ -132,7 +132,7 @@ backend/
 
 ### 4.6 `KnowledgeRetriever` ([backend/v/rag/retriever.py](../backend/v/rag/retriever.py))
 
-共享知识语料库（Milvus `knowledge_chunks` collection）的唯一查询入口。三级 cascade：dense cosine（stage-1） → hybrid BM25+dense（stage-2） → LLM 结构化重写 + hybrid（stage-3）。每级用**相对 margin 置信门控**（`v/rag/gate.py`）决定退出：top-1 过绝对 floor 且 `(top1−top2)/top1 ≥ rel_margin`。门控参数由 `backend.eval.retrieval.calibrate` 在 337-QA 集上按 Youden's J 自动校准（stage1 floor=0.70 / stage2 rel_margin=0.04），实测 hit@5=0.985、stage 分布 ≈ 77%:7%:16%。详见 `backend/eval/README.md`。
+共享知识语料库（Milvus `knowledge_chunks` collection）的唯一查询入口。**单次 hybrid 检索 + rerank 精排**：dense cosine + BM25 经 `WeightedRanker` 融合取候选池（默认 20 条）→ cross-encoder reranker 重排截 top_k。reranker 两种 transport：`LocalReranker`（自托管 sidecar，bge-reranker-v2-m3 @ :8767）/ `RemoteReranker`（云 API）；挂了降级为 hybrid 原序，不崩。**无瀑布流 / 置信门控 / LLM 重写**——agentic RAG 里 query 已是 agent LLM 从上下文写的，再用检索器 LLM 重写一遍是冗余（也是旧架构 25-49s 延迟来源），改由 rerank 做质量提升。详见 `backend/eval/README.md`。
 
 ### 4.7 `SkillRegistry` ([backend/v/skills/registry.py](../backend/v/skills/registry.py))
 
