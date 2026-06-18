@@ -19,6 +19,9 @@ llm:
   main_primary: deepseek-v4-flash      # main reasoning model
   main_fallback: qwen3.6-plus       # same-family fallback on timeout/5xx/429
   timeout_seconds: 30                  # per-call timeout before fallback
+  thinking: false                      # reasoning/CoT mode; only applied to
+                                       # capable models (qwen3/qwq/deepseek-r),
+                                       # silently ignored + logged for others
 
 embedding:
   model: text-embedding-v4             # DashScope Qwen embedding

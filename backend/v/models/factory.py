@@ -10,14 +10,27 @@ The factory does not cache instances; the LLMCaller above caches per-role.
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from pydantic import SecretStr
 
 from backend.v.configs.base import EmbeddingSettings, LLMSettings
+from backend.v.utils.logging import get_logger
 
 ChatRole = Literal["main_primary", "main_fallback", "summary", "memory_extract"]
+
+_log = get_logger("models.factory")
+
+# Model families that accept the DashScope ``enable_thinking`` switch.
+# Matched case-insensitively against the model name. Everything else is
+# treated as not-thinking-capable (the switch is silently dropped).
+_THINKING_CAPABLE = re.compile(r"(qwen3|qwq|deepseek-r|deepseek-v3\.[1-9])", re.IGNORECASE)
+
+# Track which (model) we've already warned about, so a disabled-thinking
+# request against an incapable model logs exactly once, not per call.
+_warned_no_thinking: set[str] = set()
 
 
 def _model_for_role(settings: LLMSettings, role: ChatRole) -> str:
@@ -31,15 +44,46 @@ def _model_for_role(settings: LLMSettings, role: ChatRole) -> str:
     return settings.main_fallback
 
 
+def _thinking_extra_body(model: str, thinking: bool) -> dict | None:
+    """Resolve the ``extra_body`` for the thinking switch, with graceful degrade.
+
+    - Thinking-capable model → always pass ``enable_thinking`` (True turns it
+      on; False explicitly turns OFF the family default, e.g. Qwen3 which
+      defaults thinking on and would otherwise add latency / reject streaming).
+    - Incapable model + thinking requested → don't pass anything (no error, no
+      forced thinking); log once that we fell back to no-thinking.
+    - Incapable model + thinking off → nothing to do.
+    """
+    if _THINKING_CAPABLE.search(model):
+        return {"enable_thinking": thinking}
+    if thinking and model not in _warned_no_thinking:
+        _warned_no_thinking.add(model)
+        _log.info(
+            "models.factory.thinking_unsupported",
+            model=model,
+            note="model does not support thinking; using no-thinking mode",
+        )
+    return None
+
+
 def get_chat_model(settings: LLMSettings, role: ChatRole) -> ChatOpenAI:
-    """Construct a ``ChatOpenAI`` for the given role against DeepSeek."""
-    return ChatOpenAI(
-        model=_model_for_role(settings, role),
-        base_url=settings.base_url_deepseek or None,
-        api_key=SecretStr(settings.api_key_deepseek) if settings.api_key_deepseek else None,
-        timeout=settings.timeout_seconds,
-        max_retries=0,  # LLMCaller handles fallback; we want a single attempt here.
-    )
+    """Construct a ``ChatOpenAI`` for the given role against DeepSeek.
+
+    The ``settings.thinking`` flag is applied via ``extra_body`` only for
+    models that support it; for others it is silently dropped (logged once).
+    """
+    model = _model_for_role(settings, role)
+    extra_body = _thinking_extra_body(model, settings.thinking)
+    kwargs: dict = {
+        "model": model,
+        "base_url": settings.base_url_deepseek or None,
+        "api_key": SecretStr(settings.api_key_deepseek) if settings.api_key_deepseek else None,
+        "timeout": settings.timeout_seconds,
+        "max_retries": 0,  # LLMCaller handles fallback; we want a single attempt here.
+    }
+    if extra_body is not None:
+        kwargs["extra_body"] = extra_body
+    return ChatOpenAI(**kwargs)
 
 
 def get_embedding(

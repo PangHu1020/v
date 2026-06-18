@@ -152,6 +152,12 @@ class LLMSettings(_YamlSettings):
     main_primary: str = "deepseek-chat-v4-pro"
     main_fallback: str = "deepseek-chat-v4-flash"
     timeout_seconds: int = 30
+    thinking: bool = False
+    """Enable model reasoning / chain-of-thought mode (e.g. Qwen3
+    ``enable_thinking``). Only applied to models known to support it; for
+    others it is silently ignored (logged once) — see
+    :func:`backend.v.models.factory.get_chat_model`. Default False because
+    thinking adds latency and most customer-service turns don't need it."""
 
 
 class LangSmithSettings(_YamlSettings):

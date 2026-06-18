@@ -62,6 +62,12 @@ class TestLLMSettings:
         assert settings.base_url_qwen.endswith("/compatible-mode/v1")
         assert settings.api_key_qwen == "sk-qwen"
 
+    def test_thinking_defaults_false_and_overrides(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        assert _no_env_file(LLMSettings).thinking is False
+        monkeypatch.setenv("LLM_THINKING", "true")
+        assert _no_env_file(LLMSettings).thinking is True
+
+
 
 class TestEmbeddingSettings:
     def test_defaults_match_locked_decision(self) -> None:
