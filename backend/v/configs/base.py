@@ -375,35 +375,36 @@ class MilvusSettings(_YamlSettings):
 
 
 class RAGSettings(_YamlSettings):
-    """RAG cascade search parameters.
+    """RAG retrieval parameters: single hybrid search + rerank.
 
-    The cascade uses a **relative-margin confidence gate** per stage (see
-    :mod:`backend.v.rag.gate`), not a single absolute score cutoff. A stage
-    exits when its top hit clears a low absolute ``floor`` AND is separated
-    from the runner-up by at least ``rel_margin`` ((top1-top2)/top1). The
-    margin is scale-invariant, so the same params hold for dense cosine
-    (stage 1) and the unnormalized hybrid fused-rank score (stage 2).
+    Retrieval is one hybrid pass (dense embedding + BM25 sparse, fused by
+    Milvus ``WeightedRanker``) producing ``rerank_candidates`` rows, then a
+    cross-encoder reranker re-scores and truncates to the final ``top_k``.
 
-    All four gate params are best set by ``backend.eval.retrieval.calibrate``
-    (grid-search over the labelled QA set), not hand-picked.
+    No cascade / confidence gate / LLM query-rewrite: this is agentic RAG, the
+    query is already written by the agent LLM from conversation context, so a
+    second LLM rewrite was redundant. Rerank does the quality lifting instead.
     """
 
     model_config = SettingsConfigDict(**_COMMON, env_prefix="RAG_")
 
-    # Stage-1 (dense cosine) exit gate. Defaults are calibrated on the 337-QA
-    # eval set (Youden's J); re-run backend.eval.retrieval.calibrate after a
-    # model/corpus change.
-    stage1_floor: float = Field(default=0.70, ge=0.0, le=1.0)
-    stage1_rel_margin: float = Field(default=0.0, ge=0.0, le=1.0)
-    # Stage-2 (hybrid WeightedRanker) exit gate. No absolute floor — the
-    # fused-rank score is unnormalized, so only the scale-invariant relative
-    # margin is meaningful here.
-    stage2_floor: float = Field(default=0.0, ge=0.0, le=1.0)
-    stage2_rel_margin: float = Field(default=0.04, ge=0.0, le=1.0)
-
     min_k: int = Field(default=3, ge=1)
     dense_weight: float = Field(default=0.5, ge=0.0, le=1.0)
     bm25_weight: float = Field(default=0.5, ge=0.0, le=1.0)
+
+    # ── Rerank ────────────────────────────────────────────────────────────
+    rerank_enabled: bool = Field(default=True)
+    """When True, the hybrid candidate set is reranked before truncation.
+    When False (or the reranker is unreachable), hybrid order is used as-is."""
+    rerank_mode: str = Field(default="local")
+    """Transport: ``local`` (self-hosted sidecar) or ``remote`` (hosted API)."""
+    rerank_url: str = Field(default="http://localhost:8767/rerank")
+    rerank_model: str = Field(default="bge-reranker-v2-m3")
+    """Model name — only sent to the remote API; the sidecar ignores it."""
+    rerank_api_key: str = Field(default="")
+    """Bearer key for the remote reranker (secret → set via env RAG_RERANK_API_KEY)."""
+    rerank_candidates: int = Field(default=20, ge=1)
+    """How many hybrid hits to feed the reranker (the candidate pool)."""
 
 
 class MCPSettings(_YamlSettings):

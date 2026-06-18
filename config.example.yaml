@@ -51,18 +51,17 @@ bus:
   debounce_ms: 500                     # message-burst merge window
 
 rag:
-  # Cascade confidence gate (relative-margin + low floor, per stage).
-  # A stage exits when top-1 >= floor AND (top1-top2)/top1 >= rel_margin.
-  # Defaults below are calibrated on the 337-QA eval set (Youden's J).
-  # Re-run `python -m backend.eval.retrieval.calibrate --write` after a
-  # model/corpus change — don't hand-pick.
-  stage1_floor: 0.70                   # stage-1 dense cosine absolute floor
-  stage1_rel_margin: 0.0               # stage-1 separation (floor alone wins here)
-  stage2_floor: 0.0                    # stage-2 hybrid: no floor (unnormalized scale)
-  stage2_rel_margin: 0.04              # stage-2 min relative separation
-  min_k: 3                             # min results before a stage may exit
+  # Single hybrid search (dense + BM25, WeightedRanker) → rerank. No cascade.
+  min_k: 3                             # minimum results to return
   dense_weight: 0.5                    # hybrid dense branch weight
   bm25_weight: 0.5                     # hybrid BM25 branch weight
+  rerank_enabled: true                 # rerank hybrid candidates before truncating
+  rerank_mode: local                   # local (sidecar) | remote (hosted API)
+  rerank_url: http://localhost:8767/rerank
+  rerank_model: bge-reranker-v2-m3     # only sent to remote API; sidecar ignores
+  rerank_candidates: 20                # hybrid hits fed to the reranker
+  # rerank_api_key → secret, set RAG_RERANK_API_KEY in .env for remote mode
+
 
 milvus:
   uri: http://localhost:19530

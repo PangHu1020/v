@@ -1,4 +1,4 @@
-"""Unit tests for the Milvus cascade retriever."""
+"""Unit tests for the Milvus hybrid+rerank retriever."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ for _a in (
 sys.modules["pymilvus"] = _pm
 
 from backend.v.configs.base import MilvusSettings, RAGSettings  # noqa: E402
-from backend.v.rag.retriever import KnowledgeRetriever, QueryRewriteResult  # noqa: E402
+from backend.v.rag.retriever import KnowledgeRetriever  # noqa: E402
 
 
 def _fake_embedder(vector: list[float] | None = None) -> MagicMock:
@@ -51,46 +51,26 @@ def _hit(source_id: str, text: str, source_type: str = "product", score: float =
     }
 
 
-def _settings() -> MagicMock:
+def _settings(*, rerank_enabled: bool = False) -> MagicMock:
     cfg = MagicMock()
     cfg.milvus = MilvusSettings(uri="http://localhost:19530", token="", collection_name="test")
     cfg.rag = RAGSettings(
-        stage1_floor=0.7,
-        stage1_rel_margin=0.0,
-        stage2_floor=0.0,
-        stage2_rel_margin=0.0,
         min_k=2,
         dense_weight=0.5,
         bm25_weight=0.5,
+        rerank_enabled=rerank_enabled,
+        rerank_mode="local",
+        rerank_candidates=20,
     )
     return cfg
 
 
-class TestRetrieveCascade:
+class TestRetrieveHybrid:
     @patch("backend.v.rag.retriever.MilvusClient")
-    async def test_stage1_success_fast_path(self, mock_cls: MagicMock) -> None:
+    async def test_hybrid_search_no_rerank(self, mock_cls: MagicMock) -> None:
         client = MagicMock()
         mock_cls.return_value = client
         client.has_collection.return_value = True
-        client.search.return_value = [
-            [_hit("P001", "iPhone", score=0.85), _hit("P002", "iPad", score=0.80)]
-        ]
-
-        result = await KnowledgeRetriever().retrieve(
-            embedder=_fake_embedder(), query="apple", settings=_settings()
-        )
-
-        assert len(result) == 2
-        assert result[0]["similarity"] == 0.85
-        client.search.assert_called_once()
-        client.hybrid_search.assert_not_called()
-
-    @patch("backend.v.rag.retriever.MilvusClient")
-    async def test_stage2_fallback_hybrid(self, mock_cls: MagicMock) -> None:
-        client = MagicMock()
-        mock_cls.return_value = client
-        client.has_collection.return_value = True
-        client.search.return_value = [[_hit("P001", "iPhone", score=0.5)]]
         client.hybrid_search.return_value = [
             [_hit("P001", "iPhone", score=0.9), _hit("P002", "iPad", score=0.8)]
         ]
@@ -99,42 +79,61 @@ class TestRetrieveCascade:
             embedder=_fake_embedder(), query="apple", settings=_settings()
         )
 
-        assert len(result) == 2
-        client.search.assert_called_once()
+        assert [r["source_id"] for r in result] == ["P001", "P002"]
+        # Single hybrid pass — no dense-only stage, no cascade.
         client.hybrid_search.assert_called_once()
+        client.search.assert_not_called()
 
     @patch("backend.v.rag.retriever.MilvusClient")
-    async def test_stage3_fallback_llm_rewrite(self, mock_cls: MagicMock) -> None:
+    async def test_truncates_to_top_k(self, mock_cls: MagicMock) -> None:
         client = MagicMock()
         mock_cls.return_value = client
         client.has_collection.return_value = True
-        client.search.return_value = [[_hit("P001", "x", score=0.5)]]
-        client.hybrid_search.side_effect = [
-            [[_hit("P001", "x", score=0.5)]],
-            [[_hit("P002", "iPad Mini", score=0.85)]],
+        client.hybrid_search.return_value = [
+            [_hit(f"P{i:03d}", f"item {i}", score=0.9 - i * 0.05) for i in range(5)]
         ]
-        llm = MagicMock()
-        res = MagicMock()
-        res.parsed = QueryRewriteResult(
-            rewritten_query="苹果平板", keywords=["苹果", "平板"], source_type_filter=None
-        )
-        llm.chat = AsyncMock(return_value=res)
 
         result = await KnowledgeRetriever().retrieve(
-            embedder=_fake_embedder(), llm_caller=llm, query="买个平板", settings=_settings()
+            embedder=_fake_embedder(), query="x", top_k=3, settings=_settings()
         )
+        assert len(result) == 3
 
-        assert result[0]["source_id"] == "P002"
-        client.search.assert_called_once()
-        assert client.hybrid_search.call_count == 2
-        llm.chat.assert_called_once()
+    @patch("backend.v.rag.retriever.build_reranker")
+    @patch("backend.v.rag.retriever.MilvusClient")
+    async def test_rerank_reorders(self, mock_cls: MagicMock, mock_build: MagicMock) -> None:
+        client = MagicMock()
+        mock_cls.return_value = client
+        client.has_collection.return_value = True
+        client.hybrid_search.return_value = [
+            [
+                _hit("P001", "a", score=0.9),
+                _hit("P002", "b", score=0.8),
+                _hit("P003", "c", score=0.7),
+            ]
+        ]
+        # Reranker flips the order: P003 first.
+        reranker = MagicMock()
+        reranker.rerank = AsyncMock(return_value=[_row("P003", "c"), _row("P001", "a")])
+        mock_build.return_value = reranker
+
+        trace: dict = {}
+        result = await KnowledgeRetriever().retrieve(
+            embedder=_fake_embedder(),
+            query="x",
+            top_k=2,
+            settings=_settings(rerank_enabled=True),
+            trace=trace,
+        )
+        assert [r["source_id"] for r in result] == ["P003", "P001"]
+        assert trace["reranked"] is True
+        reranker.rerank.assert_awaited_once()
 
     @patch("backend.v.rag.retriever.MilvusClient")
     async def test_setup_collection_when_not_exists(self, mock_cls: MagicMock) -> None:
         client = MagicMock()
         mock_cls.return_value = client
         client.has_collection.return_value = False
-        client.search.return_value = [[_hit("P001", "x", score=0.9), _hit("P002", "y", score=0.8)]]
+        client.hybrid_search.return_value = [[_hit("P001", "x"), _hit("P002", "y")]]
 
         await KnowledgeRetriever().retrieve(
             embedder=_fake_embedder(), query="apple", settings=_settings()
@@ -143,44 +142,6 @@ class TestRetrieveCascade:
         client.create_collection.assert_called_once()
         assert client.create_index.call_count == 1
         client.load_collection.assert_called_once()
-
-    @patch("backend.v.rag.retriever.MilvusClient")
-    async def test_rewrite_no_llm_caller(self, mock_cls: MagicMock) -> None:
-        client = MagicMock()
-        mock_cls.return_value = client
-        client.has_collection.return_value = True
-        client.search.return_value = [[_hit("P001", "x", score=0.5)]]
-        client.hybrid_search.side_effect = [
-            [[_hit("P001", "x", score=0.5)]],
-            [[_hit("P001", "x", score=0.5)]],
-        ]
-
-        result = await KnowledgeRetriever().retrieve(
-            embedder=_fake_embedder(), llm_caller=None, query="apple", settings=_settings()
-        )
-
-        assert isinstance(result, list)
-        assert client.hybrid_search.call_count == 2
-
-    @patch("backend.v.rag.retriever.MilvusClient")
-    async def test_rewrite_llm_exception_recovers(self, mock_cls: MagicMock) -> None:
-        client = MagicMock()
-        mock_cls.return_value = client
-        client.has_collection.return_value = True
-        client.search.return_value = [[_hit("P001", "x", score=0.5)]]
-        client.hybrid_search.side_effect = [
-            [[_hit("P001", "x", score=0.5)]],
-            [[_hit("P001", "x", score=0.6)]],
-        ]
-        llm = MagicMock()
-        llm.chat = AsyncMock(side_effect=RuntimeError("LLM offline"))
-
-        result = await KnowledgeRetriever().retrieve(
-            embedder=_fake_embedder(), llm_caller=llm, query="apple", settings=_settings()
-        )
-
-        assert isinstance(result, list)
-        llm.chat.assert_called_once()
 
     async def test_empty_query_returns_empty(self) -> None:
         assert await KnowledgeRetriever().retrieve(embedder=_fake_embedder(), query="") == []
