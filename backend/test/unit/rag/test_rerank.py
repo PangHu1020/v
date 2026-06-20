@@ -139,12 +139,14 @@ class TestRemoteReranker:
 
 
 class TestBuildReranker:
-    def test_local_default(self) -> None:
-        assert isinstance(build_reranker(mode="local", url="http://x"), LocalReranker)
+    def test_localhost_url_builds_local(self) -> None:
+        r = build_reranker(url="http://localhost:8767/rerank")
+        assert isinstance(r, LocalReranker)
 
-    def test_remote(self) -> None:
-        r = build_reranker(mode="remote", url="http://x", model="m", api_key="k")
+    def test_loopback_ip_builds_local(self) -> None:
+        r = build_reranker(url="http://127.0.0.1:8767/rerank")
+        assert isinstance(r, LocalReranker)
+
+    def test_remote_url_builds_remote(self) -> None:
+        r = build_reranker(url="https://api.example.com/rerank", model="m", api_key="k")
         assert isinstance(r, RemoteReranker)
-
-    def test_unknown_mode_falls_back_to_local(self) -> None:
-        assert isinstance(build_reranker(mode="weird", url="http://x"), LocalReranker)

@@ -1,4 +1,5 @@
 """ragas 0.4 metrics setup using InstructorLLM (required by collections metrics)."""
+
 from __future__ import annotations
 
 import sys

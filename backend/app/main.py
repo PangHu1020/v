@@ -110,7 +110,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         recent_events_to_inject=settings.memory.recent_events_to_inject,
         compression_threshold_tokens=settings.memory.compression_threshold_tokens,
         compression_keep_recent_messages=settings.memory.compression_keep_recent_messages,
-        token_model=settings.llm.main_primary,
+        token_model=settings.llm.model,
     )
 
     consumer = BusConsumer(

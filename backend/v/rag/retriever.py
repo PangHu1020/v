@@ -259,7 +259,6 @@ class KnowledgeRetriever:
         reranked = False
         if rag_cfg.rerank_enabled and results:
             reranker = build_reranker(
-                mode=rag_cfg.rerank_mode,
                 url=rag_cfg.rerank_url,
                 model=rag_cfg.rerank_model,
                 api_key=rag_cfg.rerank_api_key,

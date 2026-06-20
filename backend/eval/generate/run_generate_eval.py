@@ -125,16 +125,16 @@ async def main() -> None:
     llm_settings = settings.llm
     if args.gen_model:
         llm_settings = copy.copy(settings.llm)
-        llm_settings.main_primary = args.gen_model
-        llm_settings.main_fallback = args.gen_model
+        llm_settings.model = args.gen_model
+        llm_settings.model_fallback = args.gen_model
 
     llm = get_chat_model(llm_settings, args.model)
     if args.no_think:
         # DashScope-compatible way to disable Qwen3 thinking mode
         llm = llm.bind(extra_body={"enable_thinking": False})
 
-    gen_model_name = args.gen_model or getattr(
-        settings.llm, args.model.replace("-", "_"), args.model
+    gen_model_name = args.gen_model or (
+        settings.llm.model if args.model == "main_primary" else settings.llm.model_fallback
     )
 
     retriever = KnowledgeRetriever()
@@ -150,11 +150,11 @@ async def main() -> None:
     print(f"  generated {len(rows)} answers in {gen_s:.1f}s")
 
     metrics = build_ragas_metrics(
-        judge_base_url=settings.llm.base_url_deepseek,
-        judge_api_key=settings.llm.api_key_deepseek,
-        judge_model=settings.llm.main_fallback,  # always deepseek for judging
-        embed_base_url=settings.llm.base_url_qwen,
-        embed_api_key=settings.llm.api_key_qwen,
+        judge_base_url=settings.llm.base_url_fallback,
+        judge_api_key=settings.llm.api_key_fallback,
+        judge_model=settings.llm.model_fallback,  # fallback endpoint judges
+        embed_base_url=settings.embedding.base_url,
+        embed_api_key=settings.embedding.api_key,
         embed_model=settings.embedding.model,
     )
 
@@ -165,11 +165,17 @@ async def main() -> None:
     def _kwargs(m, r):
         name = type(m).__name__
         if name == "Faithfulness":
-            return {"user_input": r["user_input"], "response": r["response"],
-                    "retrieved_contexts": r["retrieved_contexts"]}
+            return {
+                "user_input": r["user_input"],
+                "response": r["response"],
+                "retrieved_contexts": r["retrieved_contexts"],
+            }
         if name == "ContextRecall":
-            return {"user_input": r["user_input"],
-                    "retrieved_contexts": r["retrieved_contexts"], "reference": r["reference"]}
+            return {
+                "user_input": r["user_input"],
+                "retrieved_contexts": r["retrieved_contexts"],
+                "reference": r["reference"],
+            }
         if name == "AnswerRelevancy":
             return {"user_input": r["user_input"], "response": r["response"]}
         # AnswerCorrectness

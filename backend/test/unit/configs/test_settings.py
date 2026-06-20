@@ -43,24 +43,24 @@ class TestRuntimeSettings:
 
 class TestLLMSettings:
     def test_prefix_routes_correctly(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("LLM_MAIN_PRIMARY", "deepseek-chat")
-        monkeypatch.setenv("LLM_MAIN_FALLBACK", "deepseek-reasoner")
+        monkeypatch.setenv("LLM_MODEL", "deepseek-chat")
+        monkeypatch.setenv("LLM_MODEL_FALLBACK", "deepseek-reasoner")
         monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "60")
         settings = _no_env_file(LLMSettings)
-        assert settings.main_primary == "deepseek-chat"
-        assert settings.main_fallback == "deepseek-reasoner"
+        assert settings.model == "deepseek-chat"
+        assert settings.model_fallback == "deepseek-reasoner"
         assert settings.timeout_seconds == 60
 
     def test_provider_credentials(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("LLM_BASE_URL_DEEPSEEK", "https://api.deepseek.com/v1")
-        monkeypatch.setenv("LLM_API_KEY_DEEPSEEK", "sk-test")
-        monkeypatch.setenv("LLM_BASE_URL_QWEN", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-        monkeypatch.setenv("LLM_API_KEY_QWEN", "sk-qwen")
+        monkeypatch.setenv("LLM_BASE_URL", "https://api.siliconflow.cn/v1")
+        monkeypatch.setenv("LLM_API_KEY", "sk-primary")
+        monkeypatch.setenv("LLM_BASE_URL_FALLBACK", "https://api.deepseek.com/v1")
+        monkeypatch.setenv("LLM_API_KEY_FALLBACK", "sk-fallback")
         settings = _no_env_file(LLMSettings)
-        assert settings.base_url_deepseek == "https://api.deepseek.com/v1"
-        assert settings.api_key_deepseek == "sk-test"
-        assert settings.base_url_qwen.endswith("/compatible-mode/v1")
-        assert settings.api_key_qwen == "sk-qwen"
+        assert settings.base_url == "https://api.siliconflow.cn/v1"
+        assert settings.api_key == "sk-primary"
+        assert settings.base_url_fallback == "https://api.deepseek.com/v1"
+        assert settings.api_key_fallback == "sk-fallback"
 
     def test_thinking_defaults_false_and_overrides(self, monkeypatch: pytest.MonkeyPatch) -> None:
         assert _no_env_file(LLMSettings).thinking is False
@@ -206,9 +206,9 @@ class TestYamlConfig:
     def test_missing_section_falls_back_to_default(self, tmp_path, monkeypatch) -> None:
         p = self._write_yaml(tmp_path, "rag:\n  rerank_candidates: 50\n")
         monkeypatch.setenv("APP_CONFIG_FILE", str(p))
-        monkeypatch.delenv("LLM_MAIN_PRIMARY", raising=False)
+        monkeypatch.delenv("LLM_MODEL", raising=False)
         # llm section absent from YAML → code defaults
-        assert LLMSettings(_env_file=None).main_primary == "deepseek-chat-v4-pro"
+        assert LLMSettings(_env_file=None).model == "deepseek-chat-v4-pro"
 
     def test_missing_file_is_noop(self, tmp_path, monkeypatch) -> None:
         from backend.v.configs.base import _load_yaml

@@ -102,8 +102,8 @@ async def _seed(pool: asyncpg.Pool, embedder) -> int:
 async def main() -> None:
     settings = get_settings()
     configure_logging(level=settings.runtime.log_level, json=False)
-    if not settings.llm.api_key_qwen or not settings.llm.base_url_qwen:
-        _log.error("seed.missing_qwen_credentials")
+    if not settings.embedding.api_key or not settings.embedding.base_url:
+        _log.error("seed.missing_embedding_credentials")
         sys.exit(2)
 
     embedder = get_embedding(settings.llm, settings.embedding)

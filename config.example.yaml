@@ -15,17 +15,16 @@ runtime:
   log_level: INFO          # DEBUG | INFO | WARNING | ERROR
 
 llm:
-  # base_url_* / api_key_* are secrets → set in .env
-  main_primary: deepseek-v4-flash      # main reasoning model
-  main_fallback: qwen3.6-plus       # same-family fallback on timeout/5xx/429
-  timeout_seconds: 30                  # per-call timeout before fallback
-  thinking: false                      # reasoning/CoT mode; only applied to
-                                       # capable models (qwen3/qwq/deepseek-r),
-                                       # silently ignored + logged for others
+  # base_url / api_key / model (+ _fallback) are endpoint-specific → .env
+  # (LLM_BASE_URL / LLM_API_KEY / LLM_MODEL / *_FALLBACK).
+  temperature: 0.3                      # sampling temperature; lower = more deterministic
+  timeout_seconds: 30                   # per-call timeout before fallback
+  thinking: false                       # reasoning/CoT mode; only applied to
+                                        # capable models (qwen3/qwq/deepseek-r/nex-),
+                                        # silently ignored + logged for others
 
-embedding:
-  model: text-embedding-v4             # DashScope Qwen embedding
-  dim: 1024                            # must match Milvus collection dim
+# embedding base_url / api_key / model / dim are endpoint-specific → .env
+# (EMBEDDING_BASE_URL / EMBEDDING_API_KEY / EMBEDDING_MODEL / EMBEDDING_DIM).
 
 memory:
   working_ttl_seconds: 1800            # Redis working-memory TTL (= session window)
@@ -56,20 +55,17 @@ rag:
   dense_weight: 0.5                    # hybrid dense branch weight
   bm25_weight: 0.5                     # hybrid BM25 branch weight
   rerank_enabled: true                 # rerank hybrid candidates before truncating
-  rerank_mode: local                   # local (sidecar) | remote (hosted API)
-  rerank_url: http://localhost:8767/rerank
-  rerank_model: bge-reranker-v2-m3     # only sent to remote API; sidecar ignores
   rerank_candidates: 20                # hybrid hits fed to the reranker
-  # rerank_api_key → secret, set RAG_RERANK_API_KEY in .env for remote mode
+  # rerank_url / rerank_model / rerank_api_key are endpoint-specific → .env
+  # (RAG_RERANK_URL / RAG_RERANK_MODEL / RAG_RERANK_API_KEY).
+  # localhost/127.0.0.1 URL → sidecar protocol; other host → hosted-API protocol (auto-inferred).
 
 
 milvus:
-  uri: http://localhost:19530
+  # uri → .env (MILVUS_URI); token is a secret → .env (MILVUS_TOKEN)
   collection_name: knowledge_chunks
-  # token is a secret → .env
 
-skill:
-  internal_repo_path: ""               # dir of markdown SOPs; empty disables
+# skill.internal_repo_path → .env (SKILL_INTERNAL_REPO_PATH)
 
 intent:
   # Per-category confidence thresholds (top-1 must clear its bar, else clarify).
@@ -82,16 +78,14 @@ intent:
   max_clarify_turns: 1                 # clarifications per conversation before top-1 fallback
 
 mcp:
-  # JSON array of MCP server configs. Empty "[]" disables MCP (no extra tools).
-  # Each entry: {id, transport(stdio|http|sse), url|command, auth_type, ...}.
+  # servers_json → .env (MCP_SERVERS_JSON) — JSON array carrying secrets.
+  # Empty "[]" disables MCP (no extra tools). Each entry has {id, transport, url|command, ...}.
   # For OAuth: auth_type=oauth + oauth_token_url/client_id/client_secret/scope.
-  # Secrets (api_key, oauth_client_secret) are better injected via MCP_SERVERS_JSON
-  # env var than committed here. Example for the local mock server:
+  # Example for the local mock server:
   #   [{"id":"shop","transport":"http","url":"http://localhost:9100/mcp",
   #     "auth_type":"oauth","oauth_token_url":"http://localhost:9100/token",
   #     "oauth_client_id":"agent","oauth_client_secret":"secret",
   #     "write_tools":["create_handoff_ticket"]}]
-  servers_json: "[]"
   cache_l1_ttl_seconds: 300            # in-memory tool-result cache TTL
   cache_l2_ttl_seconds: 86400          # Redis tool-result cache TTL
   call_timeout_seconds: 30             # per tool-call timeout
@@ -102,7 +96,7 @@ wecom_aibot:
   # ws_url / bot_id / secret are secrets → .env
 
 langsmith:
-  tracing: false
+  # tracing toggle + api_key → .env (LANGSMITH_TRACING / LANGSMITH_API_KEY)
   project: v-main
   endpoint: https://api.smith.langchain.com
   # api_key is a secret → .env

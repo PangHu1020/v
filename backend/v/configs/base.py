@@ -141,19 +141,35 @@ class RuntimeSettings(_YamlSettings):
 
 
 class LLMSettings(_YamlSettings):
-    """Provider credentials and routing for chat completions."""
+    """Chat-completion endpoints + routing.
+
+    Two independent chat endpoints (each its own URL/key/model) so primary and
+    fallback can be different providers — main on one vendor, fallback on
+    another, for cross-provider failover. ``summary`` / ``memory_extract``
+    roles reuse the fallback (cheap-tier) endpoint.
+
+    Embedding has its own settings class (:class:`EmbeddingSettings`) — fully
+    decoupled, since chat and embedding are commonly different providers.
+    """
 
     model_config = SettingsConfigDict(**_COMMON, env_prefix="LLM_")
 
-    base_url_deepseek: str = ""
-    api_key_deepseek: str = ""
-    base_url_qwen: str = ""
-    api_key_qwen: str = ""
-    main_primary: str = "deepseek-chat-v4-pro"
-    main_fallback: str = "deepseek-chat-v4-flash"
+    # Primary chat endpoint.
+    base_url: str = ""
+    api_key: str = ""
+    model: str = "deepseek-chat-v4-pro"
+    # Fallback chat endpoint (independent provider/URL/key allowed).
+    base_url_fallback: str = ""
+    api_key_fallback: str = ""
+    model_fallback: str = "deepseek-chat-v4-flash"
+
     timeout_seconds: int = 30
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    """Sampling temperature for chat completions. Lower = more deterministic
+    (good for tool-routing / extraction), higher = more varied. A non-secret
+    behaviour tunable, so it lives in config.yaml, not .env."""
     thinking: bool = False
-    """Enable model reasoning / chain-of-thought mode (e.g. Qwen3
+    """Enable model reasoning / chain-of-thought mode (e.g. Qwen3 / Nex
     ``enable_thinking``). Only applied to models known to support it; for
     others it is silently ignored (logged once) — see
     :func:`backend.v.models.factory.get_chat_model`. Default False because
@@ -178,10 +194,17 @@ class LangSmithSettings(_YamlSettings):
 
 
 class EmbeddingSettings(_YamlSettings):
-    """Embedding model configuration. Uses Qwen credentials from ``LLMSettings``."""
+    """Embedding endpoint — independent URL/key/model/dim from chat.
+
+    Chat and embedding are commonly different providers (e.g. chat on
+    SiliconFlow, embedding on DashScope), so this carries its own credentials
+    rather than borrowing from :class:`LLMSettings`.
+    """
 
     model_config = SettingsConfigDict(**_COMMON, env_prefix="EMBEDDING_")
 
+    base_url: str = ""
+    api_key: str = ""
     model: str = "text-embedding-v4"
     dim: int = 1024
 
@@ -359,9 +382,7 @@ class IntentSettings(_YamlSettings):
 
     def threshold_for(self, intent: str) -> float:
         """Per-intent threshold lookup; unknown intents fall back to general."""
-        return float(
-            getattr(self, f"threshold_{intent}", self.threshold_general)
-        )
+        return float(getattr(self, f"threshold_{intent}", self.threshold_general))
 
 
 class MilvusSettings(_YamlSettings):
@@ -396,9 +417,9 @@ class RAGSettings(_YamlSettings):
     rerank_enabled: bool = Field(default=True)
     """When True, the hybrid candidate set is reranked before truncation.
     When False (or the reranker is unreachable), hybrid order is used as-is."""
-    rerank_mode: str = Field(default="local")
-    """Transport: ``local`` (self-hosted sidecar) or ``remote`` (hosted API)."""
     rerank_url: str = Field(default="http://localhost:8767/rerank")
+    """Reranker endpoint. Transport is inferred from the host: localhost /
+    127.0.0.1 → local sidecar protocol; anything else → hosted API protocol."""
     rerank_model: str = Field(default="bge-reranker-v2-m3")
     """Model name — only sent to the remote API; the sidecar ignores it."""
     rerank_api_key: str = Field(default="")

@@ -24,6 +24,7 @@ caller falls back to the original candidate order (see
 from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
+from urllib.parse import urlparse
 
 import httpx
 
@@ -164,15 +165,25 @@ class RemoteReranker:
             return candidates[:top_n]
 
 
-def build_reranker(*, mode: str, url: str, model: str = "", api_key: str = "") -> Reranker:
-    """Construct the reranker for the configured transport ``mode``.
+def _is_local_url(url: str) -> bool:
+    """A reranker URL is 'local' (sidecar protocol) when it targets loopback."""
+    host = urlparse(url).hostname or ""
+    return host in ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+
+
+def build_reranker(*, url: str, model: str = "", api_key: str = "") -> Reranker:
+    """Construct the reranker, inferring transport from the URL host.
+
+    Loopback host (localhost / 127.0.0.1) → :class:`LocalReranker` (sidecar
+    ``{query, passages}`` protocol). Any other host → :class:`RemoteReranker`
+    (hosted-API ``{model, query, documents}`` + bearer). No separate ``mode``
+    knob — the URL already says which protocol the endpoint speaks.
 
     Args:
-        mode: ``"local"`` (sidecar) or ``"remote"`` (hosted API).
         url: Endpoint URL.
         model: Model name (remote only).
         api_key: Bearer key (remote only).
     """
-    if mode == "remote":
-        return RemoteReranker(url, model=model, api_key=api_key)
-    return LocalReranker(url)
+    if _is_local_url(url):
+        return LocalReranker(url)
+    return RemoteReranker(url, model=model, api_key=api_key)

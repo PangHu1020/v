@@ -13,12 +13,12 @@ from backend.v.models.factory import get_chat_model, get_embedding
 def llm_settings() -> LLMSettings:
     return LLMSettings(
         _env_file=None,  # type: ignore[call-arg]
-        base_url_deepseek="https://proxy.example.com/deepseek/v1",
-        api_key_deepseek="sk-deepseek-test",
-        base_url_qwen="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        api_key_qwen="sk-qwen-test",
-        main_primary="deepseek-chat-v4-pro",
-        main_fallback="deepseek-chat-v4-flash",
+        base_url="https://api.siliconflow.cn/v1",
+        api_key="sk-primary-test",
+        model="deepseek-chat-v4-pro",
+        base_url_fallback="https://proxy.example.com/fallback/v1",
+        api_key_fallback="sk-fallback-test",
+        model_fallback="deepseek-chat-v4-flash",
         timeout_seconds=30,
     )
 
@@ -27,7 +27,9 @@ def llm_settings() -> LLMSettings:
 def embedding_settings() -> EmbeddingSettings:
     return EmbeddingSettings(
         _env_file=None,  # type: ignore[call-arg]
-        model="Qwen3-Embedding-0.6B",
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        api_key="sk-embed-test",
+        model="text-embedding-v4",
         dim=1024,
     )
 
@@ -91,9 +93,10 @@ class TestThinking:
     def test_get_chat_model_binds_extra_body_for_capable(self) -> None:
         s = LLMSettings(
             _env_file=None,  # type: ignore[call-arg]
-            api_key_deepseek="sk-test",
-            main_primary="qwen3.6-max",
-            main_fallback="deepseek-v4-flash",
+            base_url="https://api.example.com/v1",
+            api_key="sk-test",
+            model="qwen3.6-max",
+            model_fallback="deepseek-v4-flash",
             thinking=True,
         )
         chat = get_chat_model(s, "main_primary")
@@ -102,9 +105,10 @@ class TestThinking:
     def test_get_chat_model_no_extra_body_for_incapable(self) -> None:
         s = LLMSettings(
             _env_file=None,  # type: ignore[call-arg]
-            api_key_deepseek="sk-test",
-            main_primary="deepseek-v4-flash",
-            main_fallback="deepseek-v4-flash",
+            base_url="https://api.example.com/v1",
+            api_key="sk-test",
+            model="deepseek-v4-flash",
+            model_fallback="deepseek-v4-flash",
             thinking=True,  # requested but unsupported → dropped
         )
         chat = get_chat_model(s, "main_primary")
@@ -117,7 +121,7 @@ class TestGetEmbedding:
     ) -> None:
         emb = get_embedding(llm_settings, embedding_settings)
         assert isinstance(emb, OpenAIEmbeddings)
-        assert emb.model == "Qwen3-Embedding-0.6B"
+        assert emb.model == "text-embedding-v4"
         # DashScope rejects the `dimensions` param via the OpenAI-compatible endpoint
         # so factory.get_embedding deliberately omits it (always returns 1024-dim vectors).
         assert emb.dimensions is None

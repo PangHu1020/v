@@ -1,9 +1,10 @@
 """Build chat / embedding model instances from settings.
 
-Both providers are addressed via OpenAI-compatible endpoints:
-
-- DeepSeek: ``LLM_BASE_URL_DEEPSEEK`` / ``LLM_API_KEY_DEEPSEEK``
-- Qwen (DashScope): ``LLM_BASE_URL_QWEN`` / ``LLM_API_KEY_QWEN``
+Both providers are addressed via OpenAI-compatible endpoints. Chat resolves a
+``(base_url, api_key, model)`` triplet per role from :class:`LLMSettings`
+(primary vs fallback endpoints); embedding uses its own independent
+:class:`EmbeddingSettings`. Endpoint URLs/keys/model names come from ``.env``;
+behaviour tunables (``temperature``, ``thinking``) from ``config.yaml``.
 
 The factory does not cache instances; the LLMCaller above caches per-role.
 """
@@ -23,25 +24,26 @@ ChatRole = Literal["main_primary", "main_fallback", "summary", "memory_extract"]
 
 _log = get_logger("models.factory")
 
-# Model families that accept the DashScope ``enable_thinking`` switch.
-# Matched case-insensitively against the model name. Everything else is
-# treated as not-thinking-capable (the switch is silently dropped).
-_THINKING_CAPABLE = re.compile(r"(qwen3|qwq|deepseek-r|deepseek-v3\.[1-9])", re.IGNORECASE)
+# Model families that accept the ``enable_thinking`` switch (DashScope Qwen3,
+# SiliconFlow Nex, etc.). Matched case-insensitively against the model name.
+# Everything else is treated as not-thinking-capable (the switch is dropped).
+_THINKING_CAPABLE = re.compile(r"(qwen3|qwq|deepseek-r|deepseek-v3\.[1-9]|nex-)", re.IGNORECASE)
 
 # Track which (model) we've already warned about, so a disabled-thinking
 # request against an incapable model logs exactly once, not per call.
 _warned_no_thinking: set[str] = set()
 
 
-def _model_for_role(settings: LLMSettings, role: ChatRole) -> str:
+def _endpoint_for_role(settings: LLMSettings, role: ChatRole) -> tuple[str, str, str]:
+    """Return (base_url, api_key, model) for a role.
+
+    ``main_primary`` uses the primary endpoint; every other role (fallback,
+    summary, memory_extract) uses the fallback endpoint — independent
+    URL/key/model, so primary and fallback can be different providers.
+    """
     if role == "main_primary":
-        return settings.main_primary
-    if role == "main_fallback":
-        return settings.main_fallback
-    # Phase-1: summary and memory_extract reuse the same flash-tier model
-    # as the main fallback; Phase-2 may break these out into independent
-    # routing keys.
-    return settings.main_fallback
+        return settings.base_url, settings.api_key, settings.model
+    return settings.base_url_fallback, settings.api_key_fallback, settings.model_fallback
 
 
 def _thinking_extra_body(model: str, thinking: bool) -> dict | None:
@@ -67,17 +69,20 @@ def _thinking_extra_body(model: str, thinking: bool) -> dict | None:
 
 
 def get_chat_model(settings: LLMSettings, role: ChatRole) -> ChatOpenAI:
-    """Construct a ``ChatOpenAI`` for the given role against DeepSeek.
+    """Construct a ``ChatOpenAI`` for the given role's endpoint.
 
-    The ``settings.thinking`` flag is applied via ``extra_body`` only for
-    models that support it; for others it is silently dropped (logged once).
+    Resolves the full (base_url, api_key, model) triplet from the role, so the
+    returned client is already pointed at the right provider — no later
+    ``.bind(model=...)`` override needed. ``settings.thinking`` is applied via
+    ``extra_body`` only for models that support it (dropped + logged otherwise).
     """
-    model = _model_for_role(settings, role)
+    base_url, api_key, model = _endpoint_for_role(settings, role)
     extra_body = _thinking_extra_body(model, settings.thinking)
     kwargs: dict = {
         "model": model,
-        "base_url": settings.base_url_deepseek or None,
-        "api_key": SecretStr(settings.api_key_deepseek) if settings.api_key_deepseek else None,
+        "base_url": base_url or None,
+        "api_key": SecretStr(api_key) if api_key else None,
+        "temperature": settings.temperature,
         "timeout": settings.timeout_seconds,
         "max_retries": 0,  # LLMCaller handles fallback; we want a single attempt here.
     }
@@ -90,9 +95,14 @@ def get_embedding(
     settings: LLMSettings,
     embedding: EmbeddingSettings,
 ) -> OpenAIEmbeddings:
-    """Construct an ``OpenAIEmbeddings`` against the Qwen (DashScope) endpoint.
+    """Construct an ``OpenAIEmbeddings`` against the embedding endpoint.
 
-    Two DashScope-specific quirks are handled here:
+    Embedding has its own URL/key/model (``EmbeddingSettings``), independent of
+    chat — they're commonly different providers. ``settings`` (LLMSettings) is
+    kept in the signature for call-site compatibility but no longer supplies
+    embedding credentials.
+
+    Two endpoint quirks handled here:
 
     - ``check_embedding_ctx_length=False``: langchain-openai otherwise
       tiktoken-encodes inputs into token-id lists before sending. DashScope's
@@ -105,7 +115,7 @@ def get_embedding(
     """
     return OpenAIEmbeddings(
         model=embedding.model,
-        base_url=settings.base_url_qwen or None,
-        api_key=SecretStr(settings.api_key_qwen) if settings.api_key_qwen else None,
+        base_url=embedding.base_url or None,
+        api_key=SecretStr(embedding.api_key) if embedding.api_key else None,
         check_embedding_ctx_length=False,
     )

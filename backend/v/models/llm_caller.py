@@ -146,17 +146,14 @@ class LLMCaller:
 
     def _resolve(self, role: LLMRole) -> str:
         if role == "main_primary":
-            return self._settings.main_primary
-        if role == "main_fallback":
-            return self._settings.main_fallback
-        return self._settings.main_fallback
+            return self._settings.model
+        return self._settings.model_fallback
 
     def _fallback_model_for(self, role: LLMRole) -> str | None:
-        # Same-family only in Phase-1: main_primary's only fallback is
-        # main_fallback. Other roles already use the cheaper model and have
-        # no fallback configured.
+        # main_primary's only fallback is the fallback endpoint's model. Other
+        # roles already run on the fallback endpoint and have no further retry.
         if role == "main_primary":
-            return self._settings.main_fallback
+            return self._settings.model_fallback
         return None
 
     async def _invoke(
@@ -171,10 +168,8 @@ class LLMCaller:
         config: RunnableConfig | None = None,
     ) -> LLMResult:
         chat = get_chat_model(self._settings, role if not fallback_used else "main_fallback")
-        # Override the resolved model in case ``role`` and ``model`` diverge
-        # (e.g., during fallback we resolve to main_fallback but the role
-        # parameter is still the original).
-        chat = chat.bind(model=model) if hasattr(chat, "bind") else chat
+        # get_chat_model already resolves the full endpoint (url/key/model) for
+        # the role, so no model override is needed here.
 
         runnable: Any = chat
         if structured is not None:

@@ -148,9 +148,7 @@ class TestWriteToolsOptOut:
 class TestOAuthConfig:
     def test_oauth_requires_token_url_and_creds(self) -> None:
         with pytest.raises(ValidationError, match="auth_type=oauth requires"):
-            MCPServerConfig(
-                id="shop", transport="http", url="http://x/mcp", auth_type="oauth"
-            )
+            MCPServerConfig(id="shop", transport="http", url="http://x/mcp", auth_type="oauth")
 
     def test_oauth_valid(self) -> None:
         cfg = MCPServerConfig(

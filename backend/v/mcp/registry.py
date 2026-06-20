@@ -64,9 +64,7 @@ class CachingInterceptor:
     returns a reconstructed ``CallToolResult`` and skips the handler entirely.
     """
 
-    def __init__(
-        self, cache: MCPToolCache, write_tools_by_server: dict[str, set[str]]
-    ) -> None:
+    def __init__(self, cache: MCPToolCache, write_tools_by_server: dict[str, set[str]]) -> None:
         self._cache = cache
         self._write = write_tools_by_server
 
@@ -82,9 +80,7 @@ class CachingInterceptor:
 
         with bind_request(mcp_server=server, mcp_tool=tool):
             if not is_write:
-                cached = await self._cache.get(
-                    server_id=server, tool_name=tool, arguments=args
-                )
+                cached = await self._cache.get(server_id=server, tool_name=tool, arguments=args)
                 if cached is not None:
                     _log.debug("mcp.registry.cache_hit", server=server, tool=tool)
                     return CallToolResult(
@@ -96,11 +92,7 @@ class CachingInterceptor:
 
             # Only cache a successful CallToolResult (handler may also return a
             # ToolMessage / Command — those pass through uncached).
-            if (
-                not is_write
-                and isinstance(result, CallToolResult)
-                and not result.isError
-            ):
+            if not is_write and isinstance(result, CallToolResult) and not result.isError:
                 text = _extract_text(result)
                 if not text.startswith("[tool_error]"):
                     await self._cache.put(
@@ -140,9 +132,7 @@ class MCPRegistry:
         for cfg in self._configs:
             auth = None
             if cfg.auth_type == "oauth":
-                provider = ClientCredentialsProvider(
-                    cfg, request_timeout=float(self._call_timeout)
-                )
+                provider = ClientCredentialsProvider(cfg, request_timeout=float(self._call_timeout))
                 self._providers.append(provider)
                 auth = ClientCredentialsAuth(provider)
             connections[cfg.id] = cfg.to_connection(auth=auth)
@@ -152,9 +142,7 @@ class MCPRegistry:
         """Build the multi-server client and load all tools (flat list)."""
         if not self._configs:
             return
-        write_by_server = {
-            cfg.id: set(cfg.write_tools) for cfg in self._configs if cfg.write_tools
-        }
+        write_by_server = {cfg.id: set(cfg.write_tools) for cfg in self._configs if cfg.write_tools}
         interceptor = CachingInterceptor(self._cache, write_by_server)
         self._client = MultiServerMCPClient(
             self._build_connections(),

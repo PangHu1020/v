@@ -106,12 +106,9 @@ class ClientCredentialsAuth(httpx.Auth):
         self._provider = provider
 
     def sync_auth_flow(self, request):
-        raise RuntimeError(
-            "ClientCredentialsAuth is async-only; MCP transports use async httpx"
-        )
+        raise RuntimeError("ClientCredentialsAuth is async-only; MCP transports use async httpx")
 
     async def async_auth_flow(self, request):
         token = await self._provider.token()
         request.headers["Authorization"] = f"Bearer {token}"
         yield request
-

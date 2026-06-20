@@ -25,10 +25,12 @@ from backend.v.models.llm_caller import LLMCaller, LLMResult
 def settings() -> LLMSettings:
     return LLMSettings(
         _env_file=None,  # type: ignore[call-arg]
-        base_url_deepseek="https://proxy/deepseek/v1",
-        api_key_deepseek="sk-x",
-        main_primary="deepseek-chat-v4-pro",
-        main_fallback="deepseek-chat-v4-flash",
+        base_url="https://proxy/deepseek/v1",
+        api_key="sk-x",
+        model="deepseek-chat-v4-pro",
+        base_url_fallback="https://proxy/deepseek/v1",
+        api_key_fallback="sk-x",
+        model_fallback="deepseek-chat-v4-flash",
         timeout_seconds=2,
     )
 
@@ -145,8 +147,8 @@ class TestFallbackTriggers:
         ):
             small_settings = LLMSettings(
                 _env_file=None,  # type: ignore[call-arg]
-                main_primary="pro",
-                main_fallback="flash",
+                model="pro",
+                model_fallback="flash",
                 timeout_seconds=0,  # 0 forces immediate timeout
             )
             caller = LLMCaller(small_settings)
