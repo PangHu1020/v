@@ -32,6 +32,8 @@
 ```
 query (agent LLM 写好的)
   |
+  v [可选] 标量过滤: search(category=…, price_min=…, price_max=…)
+  |   命中 metadata["category"] / price 区间，先把目录缩到子集再排序（不传则不过滤）
   v 单次 hybrid search: dense cosine + BM25, WeightedRanker(0.5/0.5)
   |   取候选池 top-N（RAG_RERANK_CANDIDATES，默认 20）
   v rerank: cross-encoder 重排 (query, passage) 对，截 top_k
@@ -39,12 +41,17 @@ query (agent LLM 写好的)
       reranker 挂掉 -> 降级为 hybrid 原序（不崩）
 ```
 
+> **标量过滤**：客户说"一千多的手机"时，agent 在 `search` 填 `category="手机数码", price_max=1300`，
+> 经 Milvus 布尔 expr 命中 product `metadata` 的 category/price 把目录缩到匹配子集再排序。
+> 对话评测里它把 7 个"检索到但 gold 掉出 top-k"的 miss（gold 按品类+价格定义，纯语义 rerank
+> 会正确地把跨子类项压下去）从 0-1/4 救到 4/4。客户诉求模糊时留空，避免过窄过滤误杀。
+
 无门控、无 stage、无 LLM 重写。检索质量从"靠门控决定升级 + LLM 救场"
 转为"宽候选池 + cross-encoder 精排"。
 
-rerank 后端二选一（`RAG_RERANK_MODE`）：
-- `local`：POST 自托管 sidecar（bge-reranker-v2-m3，`start_reranker.py` 起在 :8767），零 token。
-- `remote`：POST 云 rerank API（带 api_key）。
+rerank 后端按 **URL 自动推断**（不再有 `RAG_RERANK_MODE` 开关）：
+- `RAG_RERANK_URL` 指向 `localhost`/`127.0.0.1` → `LocalReranker`（自托管 sidecar，bge-reranker-v2-m3，`scripts/start_reranker.py` 起在 :8767），零 token。
+- 其他 host → `RemoteReranker`（云 rerank API，带 `RAG_RERANK_API_KEY`）。
 
 ## 参数说明
 
@@ -64,9 +71,9 @@ rerank 后端二选一（`RAG_RERANK_MODE`）：
 | `RAG_DENSE_WEIGHT` | `0.5` | Hybrid 中 dense 分支权重 |
 | `RAG_BM25_WEIGHT` | `0.5` | Hybrid 中 BM25 稀疏分支权重 |
 | `RAG_RERANK_ENABLED` | `true` | 是否对 hybrid 候选做 rerank 精排 |
-| `RAG_RERANK_MODE` | `local` | `local`（sidecar）/ `remote`（云 API） |
-| `RAG_RERANK_URL` | `http://localhost:8767/rerank` | reranker endpoint |
+| `RAG_RERANK_URL` | `http://localhost:8767/rerank` | reranker endpoint（localhost→sidecar，其他→云 API，自动推断） |
 | `RAG_RERANK_MODEL` | `bge-reranker-v2-m3` | 模型名（仅 remote 用） |
+| `RAG_RERANK_API_KEY` | `""` | remote 模式 bearer key（secret，走 .env） |
 | `RAG_RERANK_CANDIDATES` | `20` | 送进 reranker 的 hybrid 候选数 |
 | `RAG_RERANK_API_KEY` | `""` | remote 模式 bearer key（secret，走 env） |
 
@@ -171,8 +178,12 @@ uv run python -m backend.eval.system.run_system_eval --limit 50
 # 生成数据集（离线，只读 products.jsonl + LLM 造句，~30 次调用）
 uv run python -m backend.eval.conversational.gen_conv_cases --per-constraint 1
 
-# 跑评测（需 Milvus 在线；真跑 graph，每 case 多轮 LLM）
-uv run python -m backend.eval.conversational.run_conv_eval
+# 起 reranker sidecar（hit 依赖精排；conda 环境见 scripts/start_reranker.py 顶注）
+python scripts/start_reranker.py                       # bge-reranker-v2-m3 @ :8767
+
+# 跑评测（需 Milvus + reranker 在线；真跑 graph，每 case 多轮 LLM）
+#   RAGAS judge 用独立端点（与被测 agent 解耦），配 EVAL_JUDGE_* in .env；--no-ragas 可跳过
+uv run python -m backend.eval.conversational.run_conv_eval --out report.json
 uv run python -m backend.eval.conversational.run_conv_eval --limit 2   # smoke
 ```
 
@@ -181,14 +192,22 @@ uv run python -m backend.eval.conversational.run_conv_eval --limit 2   # smoke
 | 指标 | 含义 | 怎么测 |
 |------|------|--------|
 | 检索命中率 hit (any-of) | 多轮中任一 search 是否命中 gold 商品集 | ToolMessage 提取 `[product:Pxxx]` ∩ gold |
+| 检索命中率（仅调了 search 的 case） | 排除 agent 从不调 search 的 case 后的命中率 | hit / tool_calls>0 的子集 |
+| 平均 gold 覆盖率 | 每 case 检索到的 gold 占其 gold 集比例 | retrieved ∩ gold / |gold| 求均 |
 | **任务完成率** | 客户诉求是否被实质满足（非答非所问/悬而未决） | LLM-as-judge（`judge.py`）读 transcript + hidden_need |
 | **工具调用成功率** | 工具调用未报错的比例 | 统计 ToolMessage 中 `[tool_error]`/`[tool_guard]` 前缀 |
+| **RAGAS Faithfulness** | 末轮回复是否基于检索内容（抓"不检索凭空编"幻觉） | judge LLM，输入 final_response + retrieved_contexts |
+| **RAGAS AnswerRelevancy** | 回复是否切合客户诉求 | judge LLM + embedding，输入 hidden_need + final_response |
+| **RAGAS ContextRecall** | 检索内容是否覆盖 gold 事实 | judge LLM，输入 retrieved_contexts + gold 合成 reference |
+| **RAGAS AnswerCorrectness** | 回复与 gold 商品的吻合度 | judge LLM + embedding，输入 final_response + reference |
 | 轮次 / 命中轮 | 平均对话轮数、首次命中在第几轮 | transcript user 轮计数 |
 | **token 消耗** | 每 case prompt+completion token | `TokenCounter` 回调（与 system eval 共用）挂在 graph callbacks |
-| **延迟 p95** | 整 case 多轮墙钟 | per-case 计时 |
+| **延迟 p50/p95** | 整 case 多轮墙钟 | per-case 计时 |
+
+RAGAS 四指标由独立 judge LLM 离线打分（`EVAL_JUDGE_*`，与被测 agent 解耦避免互扰），reference 从 gold 商品**机械合成**（代码枚举，无 LLM 评判，可复现）。只对"有回复且有检索内容"的 case 打分——agent 从不调 search 的 case 排除，避免把 agent 行为缺陷混进生成质量。
 
 未命中 case 的完整轨迹存档供人工 debug。失败（API/欠费）显式区分于"0 命中"，不静默吞。
 
 > 人工接管率**未纳入**：handoff 机制在项目早期已删除（无 `transfer_to_human` 工具），
 > 没有接管事件可统计。要测得先把 handoff 作为 feature 重建。
-> RAGAS 生成质量是独立的另一轴，见上面的 `generate/`。
+> 单轮 RAGAS（固定 query、固定 reference）仍保留在 `generate/`，作为不受多轮 agent 行为干扰的对照轴。

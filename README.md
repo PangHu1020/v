@@ -4,7 +4,7 @@
 
 **State-Driven Multi-Agent Customer Service over Enterprise IM**
 
-A LangGraph customer-service agent for WeCom AiBot (WeChat Work bot), with cascade RAG retrieval, hierarchical memory, and an offline evaluation harness.
+A LangGraph customer-service agent for WeCom AiBot (WeChat Work bot), with hybrid-search + rerank RAG, hierarchical memory, and an offline evaluation harness.
 
 ![Python](https://img.shields.io/badge/python-3.11+-blue)
 ![LangGraph](https://img.shields.io/badge/LangGraph-0.2-orange)
@@ -27,7 +27,7 @@ v-agent-platform is a reactive customer-service agent that answers customer inqu
 **Key highlights:**
 
 - LangGraph state machine: `enter → compress → intent → agent → [tools]* → reflect → exit`
-- Three-stage cascade RAG: dense → hybrid (BM25+dense) → LLM structural rewrite, gated by a **scale-invariant relative-margin confidence gate** (auto-calibrated from the labelled QA set)
+- Hybrid-search + rerank RAG: one Milvus pass (dense cosine + BM25, `WeightedRanker`) into a candidate pool → cross-encoder rerank to top-k. Optional scalar **metadata filter** (category + price band) narrows the catalog before ranking. No cascade / confidence gate / LLM rewrite — the agent already wrote the query.
 - Hierarchical memory: Redis working memory (hot) → Postgres `event_memory` (30-day vector recall) → `user_profile` (permanent)
 - Token-efficient memory consolidation: extract mid-session at compression, promote at session end — no redundant LLM passes
 - Strict per-shard serial ordering by `(channel, channel_user_id)`
@@ -36,7 +36,7 @@ v-agent-platform is a reactive customer-service agent that answers customer inqu
 
 ## Who is this for?
 
-Anyone building or studying **production-shaped Agentic systems over IM**: the strict app/engine layering, the bus + worker concurrency model, the hierarchical-memory lifecycle, and the evaluation harness are all decoupled and readable. A good reference for LangGraph orchestration, cascade RAG design, and how to evaluate a RAG pipeline end to end.
+Anyone building or studying **production-shaped Agentic systems over IM**: the strict app/engine layering, the bus + worker concurrency model, the hierarchical-memory lifecycle, and the evaluation harness are all decoupled and readable. A good reference for LangGraph orchestration, hybrid-search + rerank RAG design, and how to evaluate a RAG pipeline end to end.
 
 ---
 
@@ -67,13 +67,13 @@ Anyone building or studying **production-shaped Agentic systems over IM**: the s
 | **Inbound bus** | Redis Streams, sharded by `(channel, channel_user_id)`; strict per-shard serial; DLQ on handler failure |
 | **Debounce** | 500ms idle window merges message bursts into one turn before the bus |
 | **Agent graph** | LangGraph: enter → compress → intent classify → agent → tool loop → reflect → exit |
-| **Cascade RAG** | Stage-1 dense cosine → Stage-2 hybrid (dense+BM25 WeightedRanker) → Stage-3 LLM structural rewrite + hybrid |
-| **Tools** | `calculator` (safe AST), `search` (Milvus knowledge recall), `recall_memory` (per-customer episodic), `subagent` (isolated single-shot delegate) + external **MCP tools** (OAuth-authed, cached) |
+| **Hybrid RAG** | Single Milvus pass (dense + BM25 `WeightedRanker`) → candidate pool → cross-encoder rerank to top-k; optional `category` / price-band scalar filter; graceful degrade to hybrid order if the reranker is unreachable |
+| **Tools** | `calculator` (safe AST), `search` (Milvus knowledge recall, with optional metadata filter), `recall_memory` (per-customer episodic), `subagent` (isolated single-shot delegate) + external **MCP tools** (OAuth-authed, cached) |
 | **Memory** | Redis working memory (TTL) + Postgres `event_memory` (pgvector, 30-day) + `user_profile` (permanent JSONB) |
 | **Consolidation** | Mid-session extraction at token threshold; session-end promotion (working memory → profile + events), or extract-from-history for short sessions |
 | **Reflection** | Post-answer fact-check against tool results; bounded retry on hallucination |
 | **Observability** | structlog structured logging + optional LangSmith tracing (env-gated) |
-| **Evaluation** | retrieval (recall@k / MRR / nDCG by difficulty + stage), generation (RAGAS 4 metrics), system (latency p50/p95 + token cost) |
+| **Evaluation** | retrieval (recall@k / MRR / nDCG by difficulty), conversational (multi-turn hit rate + task completion + RAGAS generation quality), system (latency p50/p95 + token cost) |
 
 ---
 
@@ -130,26 +130,28 @@ v-main/
 │       ├── agents/                   # state, nodes, edges, graph, checkpoints (Redis hot / PG cold)
 │       │   ├── compression_node.py   # Mid-session memory extraction + history trim
 │       │   └── intent_reflect.py     # Intent classifier + reflection (hallucination check)
-│       ├── rag/retriever.py          # KnowledgeRetriever: Milvus 3-stage cascade
+│       ├── rag/retriever.py          # KnowledgeRetriever: Milvus hybrid search + cross-encoder rerank
 │       ├── memory/                   # working (Redis) / event_memory (pgvector) / user_profile / extractor
 │       ├── tools/                    # calculator, search, recall_memory, subagent
-│       ├── models/                   # LLMCaller (timeout + same-family fallback) + factory
-│       ├── skills/                   # markdown SOP loader + keyword matcher
+│       ├── models/                   # LLMCaller (timeout + cross-provider fallback) + factory
+│       ├── skills/                   # markdown SOP loader + progressive-disclosure catalog
 │       ├── hooks/                    # on_session_start, tool_guard
-│       └── configs/base.py           # Pydantic settings (one class per env prefix)
+│       └── configs/                  # base.py (Pydantic settings) + agent_config.py (.agent/config.json loader)
 │
 │   ├── eval/                         # Offline evaluation harness
-│   │   ├── retrieval/                # run_eval.py (cascade) + run_ablation.py + metrics.py
-│   │   ├── generate/                 # run_generate_eval.py (RAGAS 4 metrics)
+│   │   ├── retrieval/                # run_eval.py (hybrid+rerank recall/MRR/nDCG) + diagnose_misses.py + metrics.py
+│   │   ├── conversational/           # run_conv_eval.py (multi-turn hit + task + RAGAS) + ragas_score.py
+│   │   ├── generate/                 # run_generate_eval.py (single-turn RAGAS 4 metrics)
 │   │   ├── system/                   # run_system_eval.py (latency + token cost)
 │   │   ├── gen/                      # LLM data generators (catalog / QA / difficulty scorer)
 │   │   ├── seed_milvus.py            # Embed corpus → Milvus collection
-│   │   └── data/                     # products.jsonl / faq.jsonl / qa.jsonl / reports
+│   │   └── data/                     # products.jsonl / faq.jsonl / qa.jsonl / conv_cases.jsonl / reports
 │   │
-│   └── test/                         # pytest unit + e2e suites (402 tests, 82% coverage)
+│   └── test/                         # pytest unit + e2e suites (586 unit tests, ≥80% coverage gate)
 │
+├── .agent/config.json                # MCP servers + skill sources (enable-gated, ${VAR} secrets)
 ├── docker/docker-compose.yml         # postgres(pgvector) + redis + etcd + minio + milvus 2.5 + app
-├── scripts/sql/                      # Raw SQL migrations (Alembic deferred)
+├── scripts/                          # sql migrations, seed_knowledge_chunks, start_reranker (sidecar), mock_mcp_server
 ├── doc/                              # architecture / data_flow / call_chain / gaps
 ├── CLAUDE.md                         # Repo-wide engineering rules (+ per-layer CLAUDE.md)
 └── README.md
@@ -194,34 +196,41 @@ Runs [scripts/sql/](scripts/sql/) in order: pgvector extension → `agent` schem
 
 ### Configuration
 
-Two layers, by design:
+Three layers, by design:
 
 | File | Holds | Precedence |
 |---|---|---|
-| `config.yaml` | **non-secret tunables** — model names, thresholds, TTLs, shard counts, RAG weights | lowest (above code defaults) |
-| `.env` | **secrets + deployment infra** — API keys, DSNs, bot credentials | overrides YAML |
+| `config.yaml` | **non-secret tunables** — temperature, timeouts, thresholds, TTLs, shard counts, RAG weights | lowest (above code defaults) |
+| `.env` | **secrets + endpoints** — API keys, base URLs, model names, DSNs, bot credentials | overrides YAML |
+| `.agent/config.json` | **extensions** — MCP servers + skill sources, each `enable`-gated, secrets via `${VAR}` | committed; resolves `${VAR}` from env |
 
 Final precedence (highest wins): **env var > `.env` > `config.yaml` > code default**. Edit `config.yaml` to change behaviour without touching code; keep secrets out of it.
 
 ```bash
 cp config.example.yaml config.yaml    # tunables — edit freely
-cp .env.example .env                  # secrets — fill in API keys / credentials
+cp .env.example .env                  # secrets + endpoints — fill in
+# .agent/config.json ships with all extensions disabled — flip enable:true to use
 ```
 
 The YAML is *sectioned by reflection*: each top-level key maps to an `AppSettings` field (`llm`, `rag`, `memory`, `bus`, …) — no hand-written wiring, so a new settings class needs no extra config plumbing. Point at a different file with `APP_CONFIG_FILE=/path/to/config.yaml`.
 
-`.env` (secrets) minimum required:
+`.env` (secrets + endpoints) minimum required:
 
 | Group | Keys |
 |---|---|
-| LLM | `LLM_BASE_URL_DEEPSEEK` / `LLM_API_KEY_DEEPSEEK` / `LLM_BASE_URL_QWEN` / `LLM_API_KEY_QWEN` |
+| Chat LLM | `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` (+ `_FALLBACK` for the cross-provider fallback endpoint) |
+| Embedding | `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` / `EMBEDDING_DIM` (independent endpoint) |
+| Reranker | `RAG_RERANK_URL` / `RAG_RERANK_MODEL` (+ `RAG_RERANK_API_KEY` for a hosted reranker) |
 | Postgres | `POSTGRES_DSN` |
 | Redis | `REDIS_URL` |
-| Milvus | `MILVUS_TOKEN` (cloud only) |
+| Milvus | `MILVUS_URI` / `MILVUS_TOKEN` (token cloud-only) |
 | WeCom AiBot | `WECOM_AIBOT_WS_URL` / `WECOM_AIBOT_BOT_ID` / `WECOM_AIBOT_SECRET` |
+| Eval judge (optional) | `EVAL_JUDGE_BASE_URL` / `EVAL_JUDGE_API_KEY` / `EVAL_JUDGE_MODEL` (RAGAS judge, decoupled from the agent) |
 | LangSmith (optional) | `LANGSMITH_TRACING` / `LANGSMITH_API_KEY` |
 
-`config.yaml` tunables (see `config.example.yaml`): `llm.main_primary/fallback`, `embedding.model`, `memory.*` TTLs + compression thresholds, `bus.shard_count/debounce_ms`, `rag.stage1_floor/stage1_rel_margin/stage2_floor/stage2_rel_margin/weights`, `milvus.uri/collection_name`. The `rag.*` gate params are best set with `python -m backend.eval.retrieval.calibrate --write`.
+`config.yaml` tunables (see `config.example.yaml`): `llm.temperature/timeout_seconds/thinking`, `memory.*` TTLs + compression thresholds, `bus.shard_count/debounce_ms`, `rag.min_k/dense_weight/bm25_weight/rerank_enabled/rerank_candidates`, `milvus.collection_name`, `intent.*` thresholds, `mcp.*` cache/timeout.
+
+`.agent/config.json` declares MCP servers + skill sources. Each entry has an `enable` flag (only `true` loads) and may reference secrets as `${VAR}` (resolved from the environment at load time, so the file is committable). Example: a `shop` MCP server with `"oauth_client_secret": "${SHOP_OAUTH_SECRET}"`, or a skill source `{"enable": true, "path": "/srv/skills/internal"}`.
 
 Leaving `WECOM_AIBOT_WS_URL` empty disables the WS worker (it exits immediately on start).
 
@@ -252,7 +261,7 @@ uv run python -m backend.eval.seed_milvus
 ### Verify
 
 ```bash
-uv run pytest --cov=backend --cov-fail-under=80   # 402 tests, ≥80% gate
+uv run pytest --cov=backend --cov-fail-under=80   # 586 unit tests, ≥80% gate
 uv run ruff check . --fix && uv run ruff format .
 ```
 
@@ -262,23 +271,25 @@ Health probes on the FastAPI process: `GET /livez` (always 200), `GET /readyz` (
 
 ## 📊 Evaluation
 
-A three-tier offline harness over a 150-doc corpus (120 products + 30 FAQ) and 337 difficulty-balanced QA pairs. See [backend/eval/README.md](backend/eval/README.md) for full results and parameter tuning.
+A multi-tier offline harness over a 150-doc corpus (120 products + 30 FAQ), 337 difficulty-balanced QA pairs, and 30 multi-turn conversational cases. See [backend/eval/README.md](backend/eval/README.md) for full results and parameter tuning.
 
 ```bash
-# Retrieval — recall@k / MRR / nDCG, by difficulty + cascade stage
+# Retrieval — recall@k / MRR / nDCG, by difficulty (hybrid + rerank)
 uv run python -m backend.eval.retrieval.run_eval
 
-# Retrieval ablation — dense vs hybrid variants vs rewrite+hybrid
-uv run python -m backend.eval.retrieval.run_ablation --no-rewrite
+# Conversational — multi-turn hit rate + task completion + RAGAS generation quality
+#   (start the reranker sidecar first; RAGAS judge via EVAL_JUDGE_* in .env)
+uv run python -m scripts.start_reranker            # bge-reranker-v2-m3 on :8767
+uv run python -m backend.eval.conversational.run_conv_eval --out report.json
 
-# Generation — RAGAS: Faithfulness / ContextRecall / AnswerRelevancy / AnswerCorrectness
+# Generation (single-turn) — RAGAS: Faithfulness / ContextRecall / AnswerRelevancy / AnswerCorrectness
 uv run python -m backend.eval.generate.run_generate_eval --gen-model qwen3-8b --no-think
 
 # System — E2E latency (p50/p95/p99) + token consumption + cost estimate
 uv run python -m backend.eval.system.run_system_eval
 ```
 
-Headline retrieval result (337 queries, top_k=5): **hit@5 = 0.985**, cascade stage split ≈ 77% : 7% : 16% (dense : hybrid : rewrite).
+Headline retrieval result (337 queries, top_k=5): **recall@5 ≈ 0.98** on the hybrid pass. The scalar metadata filter (category + price band) recovers the conversational misses where pure semantic rerank down-ranks off-type catalog items.
 
 ---
 
@@ -301,26 +312,28 @@ enter → compress → intent → agent → route_after_agent ─┬→ tools �
 - `agent`: main-tier LLM with bound tools; loops through `ToolNode` until no more tool calls.
 - `reflect`: fact-checks the reply against tool results; bounded retry on detected hallucination.
 
-`LLMCaller` (`backend/v/models/llm_caller.py`) is the single entry point for all LLM calls: 30s timeout, same-family fallback (primary → fallback), structured output via Pydantic, and `RunnableConfig` propagation for nested LangSmith traces.
+`LLMCaller` (`backend/v/models/llm_caller.py`) is the single entry point for all LLM calls: per-call timeout, cross-provider fallback (independent primary / fallback endpoints), structured output via Pydantic, and `RunnableConfig` propagation for nested LangSmith traces.
 
 </details>
 
 <details>
-<summary>2. Cascade RAG (click me)</summary>
+<summary>2. Hybrid RAG + Rerank (click me)</summary>
 
-`KnowledgeRetriever` (`backend/v/rag/retriever.py`) runs a three-stage cascade against a single Milvus collection (`knowledge_chunks`):
+`KnowledgeRetriever` (`backend/v/rag/retriever.py`) runs one hybrid pass against a single Milvus collection (`knowledge_chunks`), then a cross-encoder rerank:
 
 ```
-query
-  ▼ Stage-1: dense cosine search       gate exits if top1 ≥ 0.70           → return (~77%)
-  ▼ Stage-2: hybrid WeightedRanker      gate exits if (top1−top2)/top1 ≥ 0.04 → return (~7%)
-  ▼ Stage-3: LLM structural rewrite + hybrid                              → return (~16%)
+query (already written by the agent LLM)
+  ▼ hybrid search: dense cosine + BM25, fused by WeightedRanker → candidate pool (default 20)
+  ▼ optional scalar filter: metadata["category"] / price band (set when the customer named them)
+  ▼ cross-encoder rerank: re-scores (query, passage) pairs → top_k
+        LocalReranker (self-hosted sidecar, bge-reranker-v2-m3 @ :8767) / RemoteReranker (hosted API)
+        reranker unreachable → degrade to hybrid order (never crashes)
 ```
 
-- Each stage exits via a **relative-margin confidence gate** (`backend/v/rag/gate.py`): top-1 must clear an absolute `floor` AND be separated from the runner-up by a relative `rel_margin` = `(top1−top2)/top1`. The margin is scale-invariant, so the same logic works for dense cosine (~0.6–0.95) and the unnormalized hybrid fused-rank score (~0.4–0.9) — which is why stage-2 uses margin-only (`floor=0`) while stage-1 uses floor-only.
-- Collection schema: `source_type`, `source_id`, `text` (BM25-analyzed), `embedding` (FLOAT_VECTOR 1024), `sparse_embedding` (auto from BM25 Function), `metadata` (JSON).
+- **No cascade / confidence gate / LLM rewrite.** This is agentic RAG — the query is already written by the agent LLM from conversation context, so a second retriever-side rewrite was redundant (and the old cascade's 25–49s latency source). Rerank does the quality lifting instead.
+- **Scalar metadata filter**: `search(query, category=…, price_min=…, price_max=…)` narrows the catalog to the matching sub-set *before* ranking via a Milvus boolean expr over the product `metadata` JSON. Unset → unfiltered (prior behaviour). Aligns retrieval with how concrete "category + budget" asks are scored.
+- Collection schema: `source_type`, `source_id`, `text` (BM25-analyzed), `embedding` (FLOAT_VECTOR 1024), `sparse_embedding` (auto from BM25 Function), `metadata` (JSON: category, brand, price).
 - Indexes: HNSW (M=16, efConstruction=64, COSINE) + SPARSE_INVERTED_INDEX (BM25).
-- Gate params are calibrated on the 337-QA eval set by Youden's J (`backend.eval.retrieval.calibrate`), not hand-picked — re-runnable after a model/corpus change.
 
 The `search` tool is a thin `@tool` wrapper over this retriever; the seeder reuses the exact same collection setup for schema parity.
 
@@ -355,7 +368,7 @@ Three temperature tiers, all sentence-shaped via `MemoryEntry`:
 <details>
 <summary>5. Models & Infra (click me)</summary>
 
-- **LLM / Embedding**: OpenAI-compatible via `langchain-openai` `ChatOpenAI(base_url=...)`. Default DashScope compatible-mode — DeepSeek chat models + Qwen `text-embedding-v4` (1024-dim). `check_embedding_ctx_length=False` so DashScope receives raw strings, not token ids.
+- **LLM / Embedding**: OpenAI-compatible via `langchain-openai` `ChatOpenAI(base_url=...)`. Chat has independent primary / fallback endpoints (cross-provider failover); embedding is a fully decoupled endpoint (commonly a different provider). `check_embedding_ctx_length=False` so DashScope-style endpoints receive raw strings, not token ids. All URLs / keys / model names live in `.env`; `temperature` / `thinking` are `config.yaml` tunables.
 - **Postgres**: single instance, multiple schemas — `agent` (memory/sessions/checkpoints/pgvector), `dw` (business warehouse), `meta` (NL2SQL metadata). asyncpg only; psycopg2 forbidden.
 - **Milvus 2.5**: vector + BM25 hybrid; deployed via docker-compose with etcd + minio.
 - **Redis**: bus, working memory, checkpointer hot path, pub/sub outbound.
@@ -366,10 +379,11 @@ Three temperature tiers, all sentence-shaped via `MemoryEntry`:
 <details>
 <summary>6. Evaluation Harness (click me)</summary>
 
-`backend/eval/` is split into three sub-modules plus data generators:
+`backend/eval/` is split into sub-modules plus data generators:
 
-- `retrieval/` — `run_eval.py` (end-to-end cascade: recall/MRR/nDCG/hit by difficulty + stage attribution) and `run_ablation.py` (dense vs hybrid weight variants vs rewrite+hybrid, run independently).
-- `generate/` — `run_generate_eval.py` scores answers with RAGAS 0.4 (Faithfulness / ContextRecall / AnswerRelevancy / AnswerCorrectness). The judge LLM is fixed to DeepSeek for apples-to-apples comparison; `--gen-model` overrides only the generation model (e.g. `qwen3-8b --no-think`).
+- `retrieval/` — `run_eval.py` (end-to-end hybrid+rerank: recall/MRR/nDCG/hit by difficulty) and `diagnose_misses.py` (isolates a miss into query vs recall vs rerank vs gold-labelling, and A/Bs the metadata filter).
+- `conversational/` — `run_conv_eval.py` drives multi-turn dialogues (a user-simulator persona vs the full agent graph) and scores retrieval hit rate, task completion (LLM judge), tool success, plus RAGAS generation quality (`ragas_score.py`). The RAGAS judge is decoupled from the agent-under-test via `EVAL_JUDGE_*`; references are synthesised mechanically from the code-enumerated gold.
+- `generate/` — `run_generate_eval.py` scores single-turn answers with RAGAS 0.4 (Faithfulness / ContextRecall / AnswerRelevancy / AnswerCorrectness); `--gen-model` overrides only the generation model (e.g. `qwen3-8b --no-think`).
 - `system/` — `run_system_eval.py` runs the full graph per query, capturing latency p50/p95/p99 and token counts (via a LangChain callback), with a configurable price table for cost estimation.
 - `gen/` — LLM generators that build the catalog, QA pairs, and difficulty scores; `seed_milvus.py` embeds the corpus into Milvus with the production schema.
 
@@ -381,16 +395,16 @@ Three temperature tiers, all sentence-shaped via `MemoryEntry`:
 `backend/v/mcp/` connects the agent to external [Model Context Protocol](https://modelcontextprotocol.io) servers (stdio / streamable-HTTP / SSE) and exposes their tools alongside the built-ins.
 
 - **Auth**: OAuth 2.0 **client_credentials** (machine-to-machine) via `oauth.py` — the backend exchanges `client_id`/`client_secret` for a bearer token, cached in-process and auto-refreshed ~30s before expiry. Also supports `api_key` (static Bearer) and `none`. `client.py` resolves the bearer at connect time.
-- **Tool naming**: `{server_id}__{tool_name}` so two servers can expose the same tool name without colliding.
+- **Tool naming**: the adapter prefixes each tool with its server id (`{server}_{tool}`) so two servers can expose the same tool name without colliding.
 - **Caching** (`cache.py`): read-class tool results go through L1 (in-memory, 5-min) + L2 (Redis, 24-h), keyed by `sha256(canonical args)`. Write-class tools (declared per-server in `write_tools`) skip the cache.
-- **Lifecycle** (`registry.py`): `MCPRegistry.connect_all()` runs at FastAPI startup, discovers each server's tools, and `build_graph(..., extra_tools=mcp_tools)` binds them to the LLM + the guarded `ToolNode`. Closed on shutdown. Empty `MCP_SERVERS_JSON` → disabled, zero overhead.
+- **Lifecycle** (`registry.py`): `MCPRegistry.connect_all()` runs at FastAPI startup, discovers each server's tools, and `build_graph(..., extra_tools=mcp_tools)` binds them to the LLM + the guarded `ToolNode`. Closed on shutdown. The server list comes from `.agent/config.json` (loaded by `configs/agent_config.py`, each entry `enable`-gated with `${VAR}` secrets) — no enabled server → disabled, zero overhead.
 - **Mock server** (`scripts/mock_mcp_server.py`): a standalone FastMCP HTTP server with a `/token` endpoint + three bearer-gated tools — `query_order`, `query_logistics`, `create_handoff_ticket` (hardcoded fake data). Exercises the full OAuth → JSON-RPC path locally; swap for a real server by changing only the `url`/credentials.
 
 ```bash
 # 1. start the mock server (listens on :9100)
 uv run python -m scripts.mock_mcp_server
 
-# 2. point the agent at it (see .env.example MCP_SERVERS_JSON), then start the app
+# 2. enable a server in .agent/config.json (set enable:true, fill ${VAR} secrets in .env), then start the app
 ```
 
 </details>
@@ -402,7 +416,7 @@ uv run python -m scripts.mock_mcp_server
 This platform is an **MVP / learning project** intended for **trusted local or internal-network** use. It does not ship production-grade hardening:
 
 - **No gateway authentication.** Internal admin/health routes are open to anyone who can reach the process.
-- **Secrets in plaintext `.env`.** `LLM_API_KEY_*`, `POSTGRES_DSN`, WeCom bot secrets are read from `.env` via `pydantic-settings`. Never commit `.env`; rotate keys manually.
+- **Secrets in plaintext `.env`.** `LLM_API_KEY`, `EMBEDDING_API_KEY`, `POSTGRES_DSN`, WeCom bot secrets are read from `.env` via `pydantic-settings` (and `${VAR}` references in `.agent/config.json` resolve from the same environment). Never commit `.env`; rotate keys manually.
 - **Default credentials** in `.env.example` / `docker-compose.yml` (e.g. `postgres:postgres`) must be changed before any non-local deployment.
 - **Plain transport / open CORS** by default. Terminate TLS and restrict origins behind a reverse proxy if exposed beyond localhost.
 - **Milvus / Postgres / Redis** are exposed without network-level access control by default — use firewall rules or Docker network isolation.
