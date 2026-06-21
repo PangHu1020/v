@@ -19,7 +19,7 @@ for _a in (
 sys.modules["pymilvus"] = _pm
 
 from backend.v.configs.base import MilvusSettings, RAGSettings  # noqa: E402
-from backend.v.rag.retriever import KnowledgeRetriever  # noqa: E402
+from backend.v.rag.retriever import KnowledgeRetriever, _build_filter_expr  # noqa: E402
 
 
 def _fake_embedder(vector: list[float] | None = None) -> MagicMock:
@@ -166,3 +166,39 @@ class TestFormat:
 
     def test_empty(self) -> None:
         assert KnowledgeRetriever().format([]) == "（未找到相关条目）"
+
+
+class TestBuildFilterExpr:
+    def test_none_when_no_constraint(self) -> None:
+        assert _build_filter_expr() is None
+
+    def test_source_type_only(self) -> None:
+        assert _build_filter_expr(source_type="product") == 'source_type == "product"'
+
+    def test_category_only(self) -> None:
+        assert _build_filter_expr(category="手机数码") == 'metadata["category"] == "手机数码"'
+
+    def test_price_band_only(self) -> None:
+        expr = _build_filter_expr(price_min=399.0, price_max=1300.0)
+        assert expr == 'metadata["price"] >= 399.0 and metadata["price"] <= 1300.0'
+
+    def test_price_min_only(self) -> None:
+        assert _build_filter_expr(price_min=100.0) == 'metadata["price"] >= 100.0'
+
+    def test_all_clauses_anded(self) -> None:
+        expr = _build_filter_expr(
+            source_type="product", category="鞋靴", price_min=359.0, price_max=429.0
+        )
+        assert expr == (
+            'source_type == "product" and metadata["category"] == "鞋靴" '
+            'and metadata["price"] >= 359.0 and metadata["price"] <= 429.0'
+        )
+
+    def test_zero_price_min_is_kept(self) -> None:
+        # 0.0 is a valid bound — must not be dropped as falsy.
+        assert _build_filter_expr(price_min=0.0) == 'metadata["price"] >= 0.0'
+
+    def test_category_quote_escaped(self) -> None:
+        # A double-quote in the value must not break out of the literal.
+        expr = _build_filter_expr(category='a"b')
+        assert expr == 'metadata["category"] == "a\\"b"'

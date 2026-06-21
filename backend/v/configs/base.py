@@ -329,22 +329,6 @@ class WecomAibotSettings(_YamlSettings):
     outbound_pubsub_channel: str = "wecom_aibot:outbound"
 
 
-class SkillSettings(_YamlSettings):
-    """Skill loader settings.
-
-    Skills are markdown SOPs surfaced to the agent via a frozen
-    ``<available_skills>`` catalog (cold layer) + the ``load_skill`` tool
-    (progressive disclosure). Markdown-only for now; SKILL.md+exec and
-    community-registry sources are deferred.
-    """
-
-    model_config = SettingsConfigDict(**_COMMON, env_prefix="SKILL_")
-
-    internal_repo_path: str = ""
-    """Filesystem path to the directory holding markdown skills. Empty
-    disables the loader."""
-
-
 class IntentSettings(_YamlSettings):
     """Intent-classification routing thresholds.
 
@@ -429,11 +413,12 @@ class RAGSettings(_YamlSettings):
 
 
 class MCPSettings(_YamlSettings):
-    """Model Context Protocol client configuration.
+    """Model Context Protocol client tunables.
 
-    ``servers_json`` is a JSON-encoded list of server configs; each entry
-    matches :class:`backend.v.mcp.config.MCPServerConfig`. Empty list (the
-    default) disables MCP entirely — no registry, no extra tools.
+    The server *list* lives in ``.agent/config.json`` (loaded by
+    :func:`backend.v.configs.agent_config.load_agent_config`) — it is a
+    structured, enable-gated list with ``${VAR}`` secrets, not a flat scalar.
+    This class holds only the cache/timeout knobs that apply across all servers.
 
     Cache TTLs apply to non-write tool results; write-class tools
     (declared per-server in ``write_tools``) skip the cache.
@@ -441,7 +426,6 @@ class MCPSettings(_YamlSettings):
 
     model_config = SettingsConfigDict(**_COMMON, env_prefix="MCP_")
 
-    servers_json: str = "[]"
     cache_l1_ttl_seconds: int = Field(default=300, ge=0)
     cache_l2_ttl_seconds: int = Field(default=86400, ge=0)
     call_timeout_seconds: int = Field(default=30, ge=1)
@@ -463,7 +447,6 @@ class AppSettings(BaseModel):
     bus: BusSettings
     wecom: WecomSettings
     wecom_aibot: WecomAibotSettings
-    skill: SkillSettings
     intent: IntentSettings
     langsmith: LangSmithSettings
     milvus: MilvusSettings
@@ -490,7 +473,6 @@ def get_settings() -> AppSettings:
         bus=BusSettings(),
         wecom=WecomSettings(),
         wecom_aibot=WecomAibotSettings(),
-        skill=SkillSettings(),
         intent=IntentSettings(),
         langsmith=LangSmithSettings(),
         milvus=MilvusSettings(),

@@ -269,3 +269,17 @@ class TestIntentRoutingE2E:
         agent_msgs = captured.get("messages", [])
         assert any("意图不明确" in getattr(m, "content", "") for m in agent_msgs)
         assert all("意图不明确" not in getattr(m, "content", "") for m in final["messages"])
+        # Invariant: the directive is appended at the TAIL (append-only, cache-stable
+        # prefix) and is NOT a SystemMessage — only the frozen head carries system
+        # messages. A mid-stream SystemMessage breaks strict templates (vllm Qwen).
+        from langchain_core.messages import SystemMessage
+
+        directive_msg = next(m for m in agent_msgs if "意图不明确" in getattr(m, "content", ""))
+        assert not isinstance(directive_msg, SystemMessage)
+        assert agent_msgs[-1] is directive_msg  # appended last, nothing after it
+        # No SystemMessage may follow a non-system message anywhere in the call.
+        first_non_system = next(
+            (i for i, m in enumerate(agent_msgs) if not isinstance(m, SystemMessage)),
+            len(agent_msgs),
+        )
+        assert all(not isinstance(m, SystemMessage) for m in agent_msgs[first_non_system:])

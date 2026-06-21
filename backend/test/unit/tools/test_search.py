@@ -64,6 +64,38 @@ class TestSourceTypeFilter:
             query="退货",
             top_k=5,
             source_type="faq",
+            category=None,
+            price_min=None,
+            price_max=None,
+            settings=None,
+        )
+
+    @patch("backend.v.tools.search._retriever")
+    async def test_meta_filters_forwarded(self, mock_retriever: MagicMock) -> None:
+        """category + price band flow through to the retriever verbatim."""
+        mock_retriever.retrieve = AsyncMock(return_value=[])
+        embedder = _fake_embedder()
+        config = {"configurable": {"embedder": embedder}}
+
+        await search.ainvoke(
+            {
+                "query": "便宜手机",
+                "category": "手机数码",
+                "price_min": 399.0,
+                "price_max": 1300.0,
+            },
+            config=config,
+        )
+
+        mock_retriever.retrieve.assert_called_once_with(
+            embedder=embedder,
+            llm_caller=None,
+            query="便宜手机",
+            top_k=5,
+            source_type=None,
+            category="手机数码",
+            price_min=399.0,
+            price_max=1300.0,
             settings=None,
         )
 

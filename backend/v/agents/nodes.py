@@ -29,7 +29,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from langchain_core.messages import RemoveMessage, SystemMessage
+from langchain_core.messages import HumanMessage, RemoveMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 from backend.v.agents.prompts import build_main_system_prompt
@@ -189,12 +189,17 @@ async def agent_node(
     bound_tools = tools if tools is not None else AGENT_TOOLS
 
     # A clarify directive (set by clarify_node) is injected for THIS call only —
-    # appended as a transient SystemMessage, never written back to state, so the
-    # cache-stable prompt prefix and the persisted history stay clean.
+    # never written back to state, so the persisted history stays clean.
+    # Appended at the TAIL (append-only) to keep the prompt prefix byte-stable
+    # for KV-cache reuse — inserting it near the front would shift every later
+    # token and invalidate the cached prefix. It's a HumanMessage, not a
+    # SystemMessage: the system block is frozen at the head (cold+warm only),
+    # and strict chat templates (vllm-hosted Qwen) reject a SystemMessage that
+    # follows a Human/AI turn ("System message must be at the beginning").
     call_messages = list(state.get("messages", []))
     directive = state.get("intent_directive")
     if directive:
-        call_messages.append(SystemMessage(content=directive))
+        call_messages.append(HumanMessage(content=directive))
 
     result = await caller.chat(
         "main_primary",

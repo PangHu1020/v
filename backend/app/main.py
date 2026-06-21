@@ -25,8 +25,8 @@ from backend.app.gateway.routers import health
 from backend.app.store import close_client, close_pool, create_client, create_pool
 from backend.v.agents.checkpoints.redis import RedisCheckpointer
 from backend.v.agents.graph import build_graph
-from backend.v.configs import get_settings
-from backend.v.mcp import MCPRegistry, MCPToolCache, parse_servers
+from backend.v.configs import get_settings, load_agent_config
+from backend.v.mcp import MCPRegistry, MCPToolCache
 from backend.v.models.factory import get_embedding
 from backend.v.models.llm_caller import LLMCaller
 from backend.v.skills import SkillRegistry, load_skills
@@ -62,15 +62,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     llm_caller = LLMCaller(settings.llm)
     embedder = get_embedding(settings.llm, settings.embedding)
 
-    skill_registry = SkillRegistry(load_skills(settings.skill.internal_repo_path))
-    if settings.skill.internal_repo_path:
-        _log.info("app.skills.loaded", count=len(skill_registry))
+    # Extension config (.agent/config.json): MCP servers + skill sources, each
+    # enable-gated, secrets via ${VAR}. Missing file → both disabled.
+    agent_cfg = load_agent_config()
 
-    # MCP: connect configured servers, discover their tools, bind on top of
-    # the built-in AGENT_TOOLS. Empty servers_json → no registry, no extra tools.
+    skills = []
+    for src in agent_cfg.skill_sources:
+        skills.extend(load_skills(src.path))
+    skill_registry = SkillRegistry(skills)
+    if agent_cfg.skill_sources:
+        _log.info(
+            "app.skills.loaded",
+            count=len(skill_registry),
+            sources=len(agent_cfg.skill_sources),
+        )
+
+    # MCP: connect enabled servers, discover their tools, bind on top of the
+    # built-in AGENT_TOOLS. No enabled servers → no registry, no extra tools.
     mcp_registry = None
     mcp_tools: list[Any] = []
-    mcp_configs = parse_servers(settings.mcp.servers_json)
+    mcp_configs = agent_cfg.mcp_servers
     if mcp_configs:
         mcp_cache = MCPToolCache(
             redis,

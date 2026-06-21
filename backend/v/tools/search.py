@@ -21,6 +21,9 @@ async def search(
     config: RunnableConfig,
     top_k: int = 5,
     source_type: str | None = None,
+    category: str | None = None,
+    price_min: float | None = None,
+    price_max: float | None = None,
 ) -> str:
     """Semantic search over the knowledge corpus (products / FAQ / policies).
 
@@ -28,10 +31,22 @@ async def search(
     knowledge base. Results carry source ids (e.g. ``[product:P001]``) for
     follow-up.
 
+    When the customer states a concrete product category or budget, pass the
+    optional ``category`` / ``price_min`` / ``price_max`` filters: they narrow
+    the catalog to the matching sub-set *before* ranking, which sharply
+    improves precision (e.g. a "1000元左右的手机" query should set
+    ``category="手机数码"``, ``price_max=1300``). Leave them unset when the
+    customer is vague — an over-tight filter can exclude good matches.
+
     Args:
         query: Natural-language description in Chinese. Be concrete.
         top_k: How many items to retrieve (1-20, default 5).
         source_type: Optional filter, e.g. ``"product"``. Omit for full corpus.
+        category: Optional product category, e.g. ``"手机数码"`` / ``"家用电器"``
+            / ``"鞋靴"`` / ``"服饰"`` / ``"食品饮料"`` / ``"休闲零食"``. Set only
+            when the customer named a concrete category.
+        price_min: Optional inclusive lower price bound in RMB.
+        price_max: Optional inclusive upper price bound in RMB.
     """
     cfg = config.get("configurable", {}) if config else {}
     embedder = cfg.get("embedder")
@@ -46,7 +61,17 @@ async def search(
         query=query,
         top_k=top_k,
         source_type=source_type,
+        category=category,
+        price_min=price_min,
+        price_max=price_max,
         settings=settings,  # None → retriever falls back to get_settings()
     )
-    _log.info("tools.search.recalled", count=len(rows), source_type=source_type or "*")
+    _log.info(
+        "tools.search.recalled",
+        count=len(rows),
+        source_type=source_type or "*",
+        category=category or "*",
+        price_min=price_min,
+        price_max=price_max,
+    )
     return _retriever.format(rows)
