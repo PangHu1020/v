@@ -54,6 +54,45 @@ def _normalize_score(score: float) -> float:
     return max(0.0, min(float(score), 1.0))
 
 
+def _escape_literal(value: str) -> str:
+    """Escape a string for safe interpolation into a Milvus filter literal."""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _build_filter_expr(
+    source_type: str | None = None,
+    category: str | None = None,
+    price_min: float | None = None,
+    price_max: float | None = None,
+) -> str | None:
+    """Compose a Milvus boolean filter expr from optional scalar constraints.
+
+    ``source_type`` filters the top-level field; ``category`` / ``price_min`` /
+    ``price_max`` filter the product ``metadata`` JSON (seeded with ``category``
+    and ``price``). All supplied clauses are AND-ed. Returns ``None`` when no
+    constraint is given, so unfiltered search behaves exactly as before.
+
+    Args:
+        source_type: Match ``source_type`` exactly (e.g. ``"product"``).
+        category: Match ``metadata["category"]`` exactly (e.g. ``"手机数码"``).
+        price_min: Lower bound (inclusive) on ``metadata["price"]``.
+        price_max: Upper bound (inclusive) on ``metadata["price"]``.
+
+    Returns:
+        A Milvus filter expression string, or ``None`` if no clause applies.
+    """
+    clauses: list[str] = []
+    if source_type:
+        clauses.append(f'source_type == "{_escape_literal(source_type)}"')
+    if category:
+        clauses.append(f'metadata["category"] == "{_escape_literal(category)}"')
+    if price_min is not None:
+        clauses.append(f'metadata["price"] >= {float(price_min)}')
+    if price_max is not None:
+        clauses.append(f'metadata["price"] <= {float(price_max)}')
+    return " and ".join(clauses) if clauses else None
+
+
 class KnowledgeRetriever:
     """Cascade retriever that executes queries against Milvus database."""
 
@@ -125,7 +164,7 @@ class KnowledgeRetriever:
         query_text: str,
         query_vector: list[float],
         top_k: int,
-        source_type: str | None,
+        filter_expr: str | None,
         dense_weight: float,
         bm25_weight: float,
     ) -> list[dict[str, Any]]:
@@ -133,9 +172,9 @@ class KnowledgeRetriever:
 
         ``stage`` selects the search mode: ``1`` = dense-only, ``2`` = hybrid
         (dense + BM25). The cascade is gone, but the two modes are kept so the
-        weights can still be ablated; production calls hybrid.
+        weights can still be ablated; production calls hybrid. ``filter_expr``
+        is a prebuilt Milvus boolean expression (or ``None`` for no filter).
         """
-        filter_expr = f"source_type == '{source_type}'" if source_type else None
 
         if stage == 1:
             # Step 1: Pure Dense Search
@@ -203,6 +242,9 @@ class KnowledgeRetriever:
         query: str,
         top_k: int = DEFAULT_TOP_K,
         source_type: str | None = None,
+        category: str | None = None,
+        price_min: float | None = None,
+        price_max: float | None = None,
         settings: Any = None,
         trace: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
@@ -215,6 +257,12 @@ class KnowledgeRetriever:
             query: Natural-language query — already written by the agent LLM.
             top_k: Maximum rows to return (clamped to [1, MAX_TOP_K]).
             source_type: Optional filter, e.g. ``"product"``.
+            category: Optional product-category filter (``metadata["category"]``),
+                e.g. ``"手机数码"``. Narrows the candidate pool to a sub-catalog
+                before hybrid search + rerank — use when the customer named a
+                concrete category.
+            price_min: Optional inclusive lower price bound (``metadata["price"]``).
+            price_max: Optional inclusive upper price bound (``metadata["price"]``).
             settings: Optional AppSettings override for testing.
             trace: Optional dict populated in-place with ``reranked`` (bool) and
                 ``candidates`` (pool size) for the offline eval harness.
@@ -243,6 +291,13 @@ class KnowledgeRetriever:
         )
         candidate_k = min(candidate_k, MAX_TOP_K * 4)  # hard ceiling
 
+        filter_expr = _build_filter_expr(
+            source_type=source_type,
+            category=category,
+            price_min=price_min,
+            price_max=price_max,
+        )
+
         results = await asyncio.to_thread(
             self._execute_search_sync,
             client,
@@ -251,7 +306,7 @@ class KnowledgeRetriever:
             query,
             query_vector,
             candidate_k,
-            source_type,
+            filter_expr,
             rag_cfg.dense_weight,
             rag_cfg.bm25_weight,
         )
