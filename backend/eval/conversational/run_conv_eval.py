@@ -14,15 +14,22 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import time
 from pathlib import Path
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
 
-from backend.eval.common import TokenCounter, get_embedder, get_llm_caller
+from backend.eval.common import TokenCounter, get_embedder, get_llm_caller, load_products
 from backend.eval.conversational.cases import ConvResult, load_conv_cases
 from backend.eval.conversational.judge import judge_task_completion
+from backend.eval.conversational.ragas_score import (
+    build_reference,
+    extract_contexts,
+    scorable,
+    score_cases,
+)
 from backend.eval.conversational.scoring import extract_retrieved_ids, score_hit
 from backend.eval.conversational.user_sim import simulate_user
 from backend.v.agents.graph import build_graph
@@ -109,6 +116,15 @@ async def _eval_one(
         1 for o in tool_outputs if o.lstrip().startswith(("[tool_error]", "[tool_guard]"))
     )
     completed, reason = await judge_task_completion(llm, case=case, transcript=transcript)
+
+    # Capture RAGAS generation-quality inputs (scored post-hoc).
+    final_response = ""
+    for t in reversed(transcript):
+        if t["role"] == "agent" and t["content"]:
+            final_response = t["content"]
+            break
+    retrieved_contexts = extract_contexts(tool_outputs)
+
     return ConvResult(
         case_id=case.case_id,
         persona=case.persona,
@@ -126,6 +142,8 @@ async def _eval_one(
         completion_tokens=counter.completion_tokens,
         latency_ms=latency_ms,
         transcript=transcript,
+        retrieved_contexts=retrieved_contexts,
+        final_response=final_response,
     )
 
 
@@ -136,6 +154,27 @@ async def main() -> None:
     )
     parser.add_argument("--out", type=Path, help="output report json (default: stdout)")
     parser.add_argument("--limit", type=int, help="only eval first N cases (for quick testing)")
+    parser.add_argument(
+        "--no-ragas",
+        action="store_true",
+        help="skip the RAGAS generation-quality stage (retrieval/feedback metrics only).",
+    )
+    parser.add_argument(
+        "--judge-base-url",
+        default=os.environ.get("EVAL_JUDGE_BASE_URL", ""),
+        help="OpenAI-compatible base_url for the RAGAS judge LLM "
+        "(default: $EVAL_JUDGE_BASE_URL, else the agent's own endpoint).",
+    )
+    parser.add_argument(
+        "--judge-api-key",
+        default=os.environ.get("EVAL_JUDGE_API_KEY", ""),
+        help="API key for the judge endpoint (default: $EVAL_JUDGE_API_KEY).",
+    )
+    parser.add_argument(
+        "--judge-model",
+        default=os.environ.get("EVAL_JUDGE_MODEL", ""),
+        help="Model name for the judge (default: $EVAL_JUDGE_MODEL).",
+    )
     args = parser.parse_args()
 
     configure_logging(level="WARNING", json=False)
@@ -191,6 +230,48 @@ async def main() -> None:
             )
     _log.info("eval.done", valid=len(valid), failed=len(failures))
 
+    # ── RAGAS generation-quality stage (post-hoc, independent judge) ────────
+    ragas_aggregate: dict[str, float] = {}
+    ragas_scored = 0
+    if not args.no_ragas and valid:
+        judge_url = args.judge_base_url or settings.llm.base_url
+        judge_key = args.judge_api_key or settings.llm.api_key
+        judge_model = args.judge_model or settings.llm.model
+        products = {p.product_id: p for p in load_products()}
+        samples = [
+            {
+                "case_id": r.case_id,
+                "user_input": next((c.hidden_need for c in cases if c.case_id == r.case_id), ""),
+                "response": r.final_response,
+                "retrieved_contexts": r.retrieved_contexts,
+                "reference": build_reference(r.gold_source_ids, products),
+            }
+            for r in valid
+        ]
+        ragas_scored = sum(1 for s in samples if scorable(s))
+        print(f"\nrunning RAGAS … (judge={judge_model}, scorable {ragas_scored}/{len(samples)})")
+        t_ragas = time.perf_counter()
+        try:
+            ragas_aggregate, per_case = await score_cases(
+                samples,
+                judge_base_url=judge_url,
+                judge_api_key=judge_key,
+                judge_model=judge_model,
+                embed_base_url=settings.embedding.base_url,
+                embed_api_key=settings.embedding.api_key,
+                embed_model=settings.embedding.model,
+                concurrency=CONCURRENCY,
+            )
+            # Fold per-case scores back onto the results for the JSON dump.
+            by_id = {pc["case_id"]: pc for pc in per_case}
+            for r in valid:
+                pc = by_id.get(r.case_id, {})
+                r.ragas = {k: v for k, v in pc.items() if k != "case_id"}
+            print(f"  RAGAS done in {time.perf_counter() - t_ragas:.1f}s")
+        except Exception as exc:
+            _log.warning("eval.ragas_failed", error=type(exc).__name__, detail=str(exc)[:200])
+            print(f"  ⚠️  RAGAS stage failed ({type(exc).__name__}); reporting without it.")
+
     # Aggregate.
     n = len(valid)
     hit_count = sum(1 for r in valid if r.hit)
@@ -211,7 +292,27 @@ async def main() -> None:
         sum(r.prompt_tokens + r.completion_tokens for r in valid) / n if valid else 0.0
     )
     latencies = sorted(r.latency_ms for r in valid)
+    p50 = latencies[n // 2] if valid else 0.0
     p95 = latencies[int(n * 0.95)] if valid else 0.0
+
+    # Retrieval depth metrics (beyond binary any-of hit).
+    searched = [r for r in valid if r.tool_calls > 0]
+    searched_hit = sum(1 for r in searched if r.hit)
+    searched_hit_rate = searched_hit / len(searched) if searched else 0.0
+    no_search = n - len(searched)
+    # Gold coverage: fraction of each case's gold set that was retrieved, averaged.
+    gold_cov = (
+        sum(
+            len(set(r.retrieved_source_ids) & set(r.gold_source_ids)) / len(r.gold_source_ids)
+            for r in valid
+            if r.gold_source_ids
+        )
+        / n
+        if valid
+        else 0.0
+    )
+    avg_prompt = sum(r.prompt_tokens for r in valid) / n if valid else 0.0
+    avg_completion = sum(r.completion_tokens for r in valid) / n if valid else 0.0
 
     # By persona / category.
     from collections import Counter
@@ -227,13 +328,31 @@ async def main() -> None:
     print(f"\n{'=' * 60}")
     print(f"Conversational Eval — {len(valid)} cases")
     print(f"{'=' * 60}")
-    print(f"Retrieval hit rate (any-of) : {hit_rate:.1%} ({hit_count}/{n})")
-    print(f"Task completion rate (judge): {task_rate:.1%} ({completed_count}/{n})")
+    print("── Retrieval ──")
+    print(f"  Hit rate (any-of, all)     : {hit_rate:.1%} ({hit_count}/{n})")
+    print(
+        f"  Hit rate (cases searched)  : {searched_hit_rate:.1%} ({searched_hit}/{len(searched)})"
+    )
+    print(f"  Avg gold coverage          : {gold_cov:.1%}")
+    print(f"  Cases agent never searched : {no_search}/{n}")
+    print(f"  Avg turns / first-hit turn : {avg_turns:.1f} / {avg_hit_turn:.1f}")
+    print("── Generation (RAGAS) ──")
+    if ragas_aggregate:
+        print(f"  (judge-scored on {ragas_scored}/{n} cases with response+contexts)")
+        for k in ("Faithfulness", "AnswerRelevancy", "ContextRecall", "AnswerCorrectness"):
+            if k in ragas_aggregate:
+                print(f"  {k:<25}: {ragas_aggregate[k]:.4f}")
+    else:
+        print("  (skipped — use --judge-* / EVAL_JUDGE_* to enable)")
+    print("── Task / Tools / Cost ──")
     tool_ok = total_tool_calls - total_tool_errors
-    print(f"Tool-call success rate      : {tool_success:.1%} ({tool_ok}/{total_tool_calls} calls)")
-    print(f"Avg turns / hit turn        : {avg_turns:.1f} / {avg_hit_turn:.1f}")
-    print(f"Avg tokens per case         : {avg_total_tokens:.0f}")
-    print(f"Latency p95 (whole case)    : {p95:.0f}ms")
+    print(f"  Task completion (judge)    : {task_rate:.1%} ({completed_count}/{n})")
+    print(f"  Tool-call success rate     : {tool_success:.1%} ({tool_ok}/{total_tool_calls} calls)")
+    print(
+        f"  Avg tokens (prompt/compl)  : {avg_total_tokens:.0f} "
+        f"({avg_prompt:.0f}/{avg_completion:.0f})"
+    )
+    print(f"  Latency p50 / p95 (case)   : {p50:.0f}ms / {p95:.0f}ms")
     print("\nBy persona (hit / task-done):")
     for p in sorted(by_persona):
         t = by_persona[p]
@@ -261,11 +380,46 @@ async def main() -> None:
     if args.out:
         import json
 
+        report = {
+            "n_cases": n,
+            "retrieval": {
+                "hit_rate": round(hit_rate, 4),
+                "hit_count": hit_count,
+                "hit_rate_searched": round(searched_hit_rate, 4),
+                "cases_searched": len(searched),
+                "cases_no_search": no_search,
+                "avg_gold_coverage": round(gold_cov, 4),
+                "avg_turns": round(avg_turns, 2),
+                "avg_first_hit_turn": round(avg_hit_turn, 2),
+                "by_category": {c: {"hit": cat_hits[c], "total": by_cat[c]} for c in by_cat},
+                "by_persona": {
+                    p: {"hit": persona_hits[p], "total": by_persona[p]} for p in by_persona
+                },
+            },
+            "ragas": ragas_aggregate,
+            "ragas_scored_cases": ragas_scored,
+            "task": {
+                "completion_rate": round(task_rate, 4),
+                "completed": completed_count,
+            },
+            "tools": {
+                "success_rate": round(tool_success, 4),
+                "calls": total_tool_calls,
+                "errors": total_tool_errors,
+            },
+            "cost": {
+                "avg_prompt_tokens": round(avg_prompt, 1),
+                "avg_completion_tokens": round(avg_completion, 1),
+                "avg_total_tokens": round(avg_total_tokens, 1),
+            },
+            "latency_ms": {"p50": round(p50, 1), "p95": round(p95, 1)},
+            "cases": [r.to_dict() for r in valid],
+        }
         args.out.write_text(
-            json.dumps([r.to_dict() for r in valid], ensure_ascii=False, indent=2),
+            json.dumps(report, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        print(f"\nFull results → {args.out}")
+        print(f"\nFull report → {args.out}")
 
 
 if __name__ == "__main__":

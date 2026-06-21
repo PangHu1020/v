@@ -129,6 +129,10 @@ class ConvResult:
     completion_tokens: int = 0
     latency_ms: float = 0.0  # wall time for the whole multi-turn case
     transcript: list[dict[str, str]] = field(default_factory=list)  # role/content per turn
+    # ── RAGAS generation-quality inputs (scored post-hoc, see ragas_score.py) ──
+    retrieved_contexts: list[str] = field(default_factory=list)  # chunk texts, union
+    final_response: str = ""  # last agent reply — the answer RAGAS scores
+    ragas: dict[str, float] = field(default_factory=dict)  # per-case metric → score
 
     @property
     def tool_success_rate(self) -> float:
@@ -156,6 +160,9 @@ class ConvResult:
             "total_tokens": self.prompt_tokens + self.completion_tokens,
             "latency_ms": round(self.latency_ms, 1),
             "transcript": self.transcript,
+            "retrieved_contexts": self.retrieved_contexts,
+            "final_response": self.final_response,
+            "ragas": self.ragas,
         }
 
 
