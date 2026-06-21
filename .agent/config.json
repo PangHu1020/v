@@ -1,0 +1,28 @@
+{
+  "mcp": {
+    "servers": [
+      {
+        "enable": false,
+        "id": "shop",
+        "transport": "http",
+        "url": "http://localhost:9100/mcp",
+        "description": "Shop backend MCP server (handoff tickets, order lookup)",
+        "auth_type": "oauth",
+        "oauth_token_url": "http://localhost:9100/token",
+        "oauth_client_id": "agent",
+        "oauth_client_secret": "${SHOP_OAUTH_SECRET}",
+        "oauth_scope": "tools:call",
+        "write_tools": ["create_handoff_ticket"]
+      }
+    ]
+  },
+  "skill": {
+    "sources": [
+      {
+        "enable": false,
+        "path": "/skills/internal",
+        "name": "Internal SOPs"
+      }
+    ]
+  }
+}

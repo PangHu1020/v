@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import json
-
 import pytest
 from pydantic import ValidationError
 
-from backend.v.mcp.config import MCPServerConfig, parse_servers
+from backend.v.mcp.config import MCPServerConfig
 
 
 class TestMCPServerConfigValidation:
@@ -78,59 +76,6 @@ class TestAuthHeaders:
         h = cfg.static_headers()
         assert h["Authorization"] == "Bearer sk"
         assert h["X-Trace"] == "1"
-
-
-class TestParseServers:
-    def test_empty_string_yields_empty_list(self) -> None:
-        assert parse_servers("") == []
-
-    def test_empty_array(self) -> None:
-        assert parse_servers("[]") == []
-
-    def test_single_stdio(self) -> None:
-        servers = parse_servers(
-            json.dumps(
-                [
-                    {
-                        "id": "products",
-                        "transport": "stdio",
-                        "command": "python",
-                        "args": ["-m", "products_mcp"],
-                    }
-                ]
-            )
-        )
-        assert len(servers) == 1
-        assert servers[0].id == "products"
-
-    def test_two_servers(self) -> None:
-        servers = parse_servers(
-            json.dumps(
-                [
-                    {"id": "a", "transport": "stdio", "command": "x"},
-                    {
-                        "id": "b",
-                        "transport": "http",
-                        "url": "https://b/",
-                        "auth_type": "api_key",
-                        "api_key": "k",
-                    },
-                ]
-            )
-        )
-        assert [s.id for s in servers] == ["a", "b"]
-
-    def test_invalid_json_raises(self) -> None:
-        with pytest.raises(ValueError, match="not valid JSON"):
-            parse_servers("not-json")
-
-    def test_non_array_raises(self) -> None:
-        with pytest.raises(ValueError, match="must be a JSON array"):
-            parse_servers('{"id": "x"}')
-
-    def test_invalid_entry_raises(self) -> None:
-        with pytest.raises(ValidationError):
-            parse_servers(json.dumps([{"id": "no-transport"}]))
 
 
 class TestWriteToolsOptOut:

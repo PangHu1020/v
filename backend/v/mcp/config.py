@@ -1,8 +1,13 @@
-"""MCP server configuration model + JSON parser."""
+"""MCP server configuration model.
+
+The server *list* is now loaded from ``.agent/config.json`` (see
+:mod:`backend.v.configs.agent_config`). This module defines the per-server
+schema; the loader assembles the list, filters by ``enable``, and resolves
+``${VAR}`` secrets.
+"""
 
 from __future__ import annotations
 
-import json
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -93,19 +98,3 @@ class MCPServerConfig(BaseModel):
         if auth is not None:
             conn["auth"] = auth
         return conn
-
-
-def parse_servers(servers_json: str) -> list[MCPServerConfig]:
-    """Parse the ``MCP_SERVERS_JSON`` env var into a list of configs.
-
-    Empty string and ``"[]"`` both yield an empty list (MCP disabled).
-    """
-    if not servers_json or servers_json.strip() == "":
-        return []
-    try:
-        raw = json.loads(servers_json)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"MCP_SERVERS_JSON is not valid JSON: {exc}") from exc
-    if not isinstance(raw, list):
-        raise ValueError("MCP_SERVERS_JSON must be a JSON array")
-    return [MCPServerConfig(**entry) for entry in raw]

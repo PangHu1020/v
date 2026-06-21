@@ -90,8 +90,9 @@ def load_skills(directory: str | Path) -> list[Skill]:
 
     Returns the list of successfully-parsed skills, sorted by name for
     stable test ordering. Empty path, empty string, or non-existent path
-    returns ``[]`` and logs once. Empty path is the documented way to
-    disable the loader (see :class:`backend.v.configs.base.SkillSettings`).
+    returns ``[]`` and logs once. Skill sources are declared (and enable-gated)
+    in ``.agent/config.json`` — see
+    :func:`backend.v.configs.agent_config.load_agent_config`.
     """
     if not directory:
         _log.info("skills.loader.disabled")
