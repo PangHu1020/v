@@ -32,7 +32,7 @@ from backend.eval.conversational.ragas_score import (
 )
 from backend.eval.conversational.scoring import extract_retrieved_ids, score_hit
 from backend.eval.conversational.user_sim import simulate_user
-from backend.v.agents.graph import build_graph
+from backend.v.agents.graph import GRAPH_RECURSION_LIMIT, build_graph
 from backend.v.configs import get_settings
 from backend.v.utils.logging import configure as configure_logging
 from backend.v.utils.logging import get_logger
@@ -52,6 +52,7 @@ async def _eval_one(
 
     counter = TokenCounter()
     config = {
+        "recursion_limit": GRAPH_RECURSION_LIMIT,
         "configurable": {
             "thread_id": thread_id,
             "llm_caller": llm,
