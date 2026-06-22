@@ -1,21 +1,28 @@
 """Tool-call safety guards (Phase-3 Group D).
 
-Two mechanisms:
+Three mechanisms:
+
+**Per-turn call budget** — caps how many tool calls one customer turn may
+issue. A turn begins at the latest ``HumanMessage``; once the cumulative tool
+calls since then would exceed :data:`TURN_MAX_TOOL_CALLS`, the guard blocks
+further calls so the agent must answer from what it already retrieved. This is
+the defence against *near-duplicate* thrash — a model that re-searches with the
+query reworded each time slips past fingerprint dedup (every fingerprint
+differs), but the raw count still stops it. Bounds token blow-up deterministically.
 
 **Dead-loop detection** — tracks a fingerprint (``tool_name:canonical_args``)
 for every tool call in the current session. When the same fingerprint
-appears 3 times a warning is logged; at 5 times the guard sets
-``state["force_handoff"] = True`` so the next ``agent_node`` invocation
-injects a ``transfer_to_human`` tool call instead of asking the LLM.
+appears 3 times a warning is logged; at 5 times the guard forces a block so
+the next ``agent_node`` invocation answers instead of re-calling. Catches
+*exact* repeats (identical args).
 
 **Per-(tool, session) circuit breaker** — counts how many times a tool
 has returned an error in this session. When the count reaches
 ``CIRCUIT_OPEN_THRESHOLD`` (default 3) the tool is blocked for the rest
-of the session and the guard sets ``force_handoff = True``.
+of the session.
 
-Both mechanisms are state-based (no Redis) so they work without
-additional infrastructure and survive within a single session's
-checkpoint chain.
+All mechanisms are state-based (no Redis) so they work without additional
+infrastructure and survive within a single session's checkpoint chain.
 """
 
 from __future__ import annotations
@@ -30,6 +37,40 @@ _log = get_logger("hooks.tool_guard")
 LOOP_WARN_THRESHOLD = 3
 LOOP_STOP_THRESHOLD = 5
 CIRCUIT_OPEN_THRESHOLD = 3
+TURN_MAX_TOOL_CALLS = 8
+"""Max tool calls one customer turn may issue before the guard forces the agent
+to answer. Sized from eval: well-behaved cases peak around 5 calls/turn, while
+runaway re-search loops hit 16+/turn — 8 leaves headroom for legitimate
+multi-constraint fan-out (one search per sub-need) yet halts the thrash."""
+
+
+def count_tool_calls_since_last_human(messages: list[Any]) -> int:
+    """Count tool calls issued in the current turn (since the last HumanMessage).
+
+    Walks ``messages`` from the end, summing each AIMessage's ``tool_calls``
+    until a HumanMessage is reached (the turn boundary). Uses duck-typing on
+    ``msg.type`` so this module stays free of langchain imports.
+    """
+    count = 0
+    for msg in reversed(messages):
+        if getattr(msg, "type", None) == "human":
+            break
+        tcs = getattr(msg, "tool_calls", None)
+        if tcs:
+            count += len(tcs)
+    return count
+
+
+def exceeds_turn_budget(prior_messages: list[Any], pending_count: int) -> bool:
+    """Whether running ``pending_count`` more tool calls breaches the turn cap.
+
+    ``prior_messages`` is the message history *excluding* the pending AIMessage
+    (its calls are passed via ``pending_count``). Returns ``True`` when the
+    already-issued calls this turn plus the pending batch would exceed
+    :data:`TURN_MAX_TOOL_CALLS`.
+    """
+    prior = count_tool_calls_since_last_human(prior_messages)
+    return prior + pending_count > TURN_MAX_TOOL_CALLS
 
 
 def compute_fingerprint(tool_name: str, args: dict[str, Any]) -> str:

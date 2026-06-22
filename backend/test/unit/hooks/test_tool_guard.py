@@ -13,19 +13,83 @@ guarded ToolNode uses inside the compiled graph:
 
 from __future__ import annotations
 
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from backend.v.hooks.tool_guard import (
     CIRCUIT_OPEN_THRESHOLD,
     LOOP_STOP_THRESHOLD,
     LOOP_WARN_THRESHOLD,
+    TURN_MAX_TOOL_CALLS,
     check_loop,
     compute_fingerprint,
+    count_tool_calls_since_last_human,
     evaluate_tool_calls,
+    exceeds_turn_budget,
     is_circuit_open,
     is_tool_error,
     update_error_counts,
 )
+
+
+def _ai_with_calls(n: int) -> AIMessage:
+    """An AIMessage carrying ``n`` distinct tool calls."""
+    return AIMessage(
+        content="",
+        tool_calls=[
+            {"name": "search", "args": {"query": f"q{i}"}, "id": f"c{i}", "type": "tool_call"}
+            for i in range(n)
+        ],
+    )
+
+
+class TestCountToolCallsSinceLastHuman:
+    def test_empty(self) -> None:
+        assert count_tool_calls_since_last_human([]) == 0
+
+    def test_no_human_counts_all(self) -> None:
+        msgs = [_ai_with_calls(2), ToolMessage(content="x", tool_call_id="c0"), _ai_with_calls(3)]
+        assert count_tool_calls_since_last_human(msgs) == 5
+
+    def test_resets_at_last_human(self) -> None:
+        # Calls before the latest HumanMessage are a prior turn — not counted.
+        msgs = [
+            _ai_with_calls(4),  # prior turn
+            HumanMessage(content="new turn"),
+            _ai_with_calls(2),  # this turn
+        ]
+        assert count_tool_calls_since_last_human(msgs) == 2
+
+    def test_ai_without_tool_calls_ignored(self) -> None:
+        msgs = [HumanMessage(content="hi"), AIMessage(content="just text")]
+        assert count_tool_calls_since_last_human(msgs) == 0
+
+    def test_multiple_calls_per_ai_summed(self) -> None:
+        msgs = [HumanMessage(content="hi"), _ai_with_calls(3), _ai_with_calls(2)]
+        assert count_tool_calls_since_last_human(msgs) == 5
+
+    def test_cap_constant_sane(self) -> None:
+        assert TURN_MAX_TOOL_CALLS >= 1
+
+
+class TestExceedsTurnBudget:
+    def test_under_budget_ok(self) -> None:
+        msgs = [HumanMessage(content="hi"), _ai_with_calls(2)]
+        # 2 prior + 1 pending = 3 ≤ cap
+        assert exceeds_turn_budget(msgs, 1) is False
+
+    def test_exactly_at_cap_ok(self) -> None:
+        msgs = [HumanMessage(content="hi"), _ai_with_calls(TURN_MAX_TOOL_CALLS - 1)]
+        assert exceeds_turn_budget(msgs, 1) is False
+
+    def test_over_cap_blocks(self) -> None:
+        msgs = [HumanMessage(content="hi"), _ai_with_calls(TURN_MAX_TOOL_CALLS)]
+        # cap prior + 1 pending > cap
+        assert exceeds_turn_budget(msgs, 1) is True
+
+    def test_prior_turn_not_counted(self) -> None:
+        # A big prior turn before the latest human must not count against this turn.
+        msgs = [_ai_with_calls(50), HumanMessage(content="new turn")]
+        assert exceeds_turn_budget(msgs, 1) is False
 
 
 class TestComputeFingerprint:

@@ -41,9 +41,25 @@ from backend.v.agents.edges import (
 from backend.v.agents.intent_reflect import clarify_node, intent_node, reflection_node
 from backend.v.agents.nodes import AGENT_TOOLS, agent_fast_node, agent_node, enter_node, exit_node
 from backend.v.agents.state import CustomerServiceState
-from backend.v.hooks.tool_guard import evaluate_tool_calls, update_error_counts
+from backend.v.hooks.tool_guard import (
+    TURN_MAX_TOOL_CALLS,
+    evaluate_tool_calls,
+    exceeds_turn_budget,
+    update_error_counts,
+)
+from backend.v.utils.logging import get_logger
+
+_log = get_logger("agents.graph")
 
 _SUBAGENT_NAME = "subagent"
+
+GRAPH_RECURSION_LIMIT = 40
+"""LangGraph super-step ceiling per ``ainvoke`` (one customer turn). A healthy
+turn under the per-turn tool budget (TURN_MAX_TOOL_CALLS=8) needs ~20 steps, so
+40 is a backstop that only trips on pathological non-tool loops (e.g.
+agent↔reflect ping-pong). Tripping raises GraphRecursionError → caught by the
+bus consumer's handler guard → DLQ. The per-turn budget is the primary defence;
+this is depth-in-depth."""
 
 
 def _make_guarded_tools_node(bound_tools: list[Any]):
@@ -70,6 +86,18 @@ def _make_guarded_tools_node(bound_tools: list[Any]):
         error_counts = dict(state.get("tool_error_counts") or {})
         tool_calls = last.tool_calls
         new_fps, force = evaluate_tool_calls(tool_calls, fingerprints, error_counts)
+
+        # Per-turn budget: tool calls already made this turn (the pending batch
+        # is in `last`, not yet in the count) + this batch. Over budget → block,
+        # so the agent answers from what it already retrieved. Defends against
+        # reworded-query thrash that slips past fingerprint dedup.
+        if exceeds_turn_budget(messages[:-1], len(tool_calls)):
+            _log.warning(
+                "tool_guard.turn_budget_exceeded",
+                pending=len(tool_calls),
+                cap=TURN_MAX_TOOL_CALLS,
+            )
+            force = True
 
         if force:
             return {

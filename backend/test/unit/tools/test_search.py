@@ -62,6 +62,7 @@ class TestSourceTypeFilter:
             embedder=embedder,
             llm_caller=None,
             query="退货",
+            keywords=None,
             top_k=5,
             source_type="faq",
             category=None,
@@ -69,6 +70,21 @@ class TestSourceTypeFilter:
             price_max=None,
             settings=None,
         )
+
+    @patch("backend.v.tools.search._retriever")
+    async def test_keywords_forwarded(self, mock_retriever: MagicMock) -> None:
+        """BM25 entity keywords flow through alongside the semantic query."""
+        mock_retriever.retrieve = AsyncMock(return_value=[])
+        embedder = _fake_embedder()
+        config = {"configurable": {"embedder": embedder}}
+
+        await search.ainvoke(
+            {"query": "便宜的入门手机", "keywords": "红米 双卡 大电池"}, config=config
+        )
+
+        _, kwargs = mock_retriever.retrieve.call_args
+        assert kwargs["query"] == "便宜的入门手机"
+        assert kwargs["keywords"] == "红米 双卡 大电池"
 
     @patch("backend.v.tools.search._retriever")
     async def test_meta_filters_forwarded(self, mock_retriever: MagicMock) -> None:
@@ -91,6 +107,7 @@ class TestSourceTypeFilter:
             embedder=embedder,
             llm_caller=None,
             query="便宜手机",
+            keywords=None,
             top_k=5,
             source_type=None,
             category="手机数码",

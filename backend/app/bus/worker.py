@@ -14,6 +14,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from backend.app.bus.memory_bus import enqueue_consolidate, enqueue_promote, mark_turn_active
 from backend.app.bus.messages import SystemMessage
+from backend.v.agents.graph import GRAPH_RECURSION_LIMIT
 from backend.v.agents.state import CustomerServiceState
 from backend.v.hooks.session import on_session_start
 from backend.v.models.llm_caller import LLMCaller
@@ -299,6 +300,7 @@ def make_bus_handler(
                     "working_memory": bootstrap["working_memory"],
                 }
                 config = {
+                    "recursion_limit": GRAPH_RECURSION_LIMIT,
                     "configurable": {
                         "thread_id": session_id,
                         "llm_caller": llm_caller,
