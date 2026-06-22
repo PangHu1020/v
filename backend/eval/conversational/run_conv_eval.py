@@ -36,6 +36,7 @@ from backend.v.agents.graph import GRAPH_RECURSION_LIMIT, build_graph
 from backend.v.configs import get_settings
 from backend.v.utils.logging import configure as configure_logging
 from backend.v.utils.logging import get_logger
+from backend.v.utils.tracing import configure_langsmith
 
 _log = get_logger("eval.run_conv")
 
@@ -194,6 +195,9 @@ async def main() -> None:
     llm = get_llm_caller()
     embedder = get_embedder()
     settings = get_settings()
+    # Opt-in LangSmith tracing (env-gated) so eval turns get the same hierarchical
+    # span tree as production — node + LLM-call latency/tokens per turn.
+    configure_langsmith(settings.langsmith)
     ckpt = MemorySaver()  # in-memory checkpointer (eval doesn't need Redis)
     graph = build_graph(ckpt)
 
