@@ -42,7 +42,9 @@ from backend.v.agents.intent_reflect import clarify_node, intent_node, reflectio
 from backend.v.agents.nodes import AGENT_TOOLS, agent_fast_node, agent_node, enter_node, exit_node
 from backend.v.agents.state import CustomerServiceState
 from backend.v.hooks.tool_guard import (
+    BLOCK_BUDGET,
     TURN_MAX_TOOL_CALLS,
+    block_message,
     evaluate_tool_calls,
     exceeds_turn_budget,
     update_error_counts,
@@ -85,37 +87,52 @@ def _make_guarded_tools_node(bound_tools: list[Any]):
         fingerprints = list(state.get("tool_fingerprints") or [])
         error_counts = dict(state.get("tool_error_counts") or {})
         tool_calls = last.tool_calls
-        new_fps, force = evaluate_tool_calls(tool_calls, fingerprints, error_counts)
+        new_fps, reasons = evaluate_tool_calls(tool_calls, fingerprints, error_counts)
 
-        # Per-turn budget: tool calls already made this turn (the pending batch
-        # is in `last`, not yet in the count) + this batch. Over budget → block,
-        # so the agent answers from what it already retrieved. Defends against
+        # Per-turn budget applies to the whole batch: once this turn's calls
+        # would exceed the cap, every pending call is blocked with the BUDGET
+        # reason (overrides per-call loop/circuit reasons). Defends against
         # reworded-query thrash that slips past fingerprint dedup.
-        if exceeds_turn_budget(messages[:-1], len(tool_calls)):
+        budget_block = exceeds_turn_budget(messages[:-1], len(tool_calls))
+        if budget_block:
             _log.warning(
                 "tool_guard.turn_budget_exceeded",
                 pending=len(tool_calls),
                 cap=TURN_MAX_TOOL_CALLS,
             )
-            force = True
 
-        if force:
+        # Build a blocked ToolMessage (status=error) for each call the guard
+        # stops, with a SPECIFIC reason so the LLM can adapt; collect the rest
+        # to actually execute.
+        blocked_messages: list = []
+        allowed_calls: list = []
+        for tc, reason in zip(tool_calls, reasons, strict=True):
+            if budget_block:
+                content = block_message(BLOCK_BUDGET, cap=TURN_MAX_TOOL_CALLS)
+            elif reason is not None:
+                content = block_message(
+                    reason["reason"], tool=reason["tool"], count=reason["count"]
+                )
+            else:
+                allowed_calls.append(tc)
+                continue
+            blocked_messages.append(
+                ToolMessage(content=content, tool_call_id=tc["id"], status="error")
+            )
+
+        # Nothing left to run (all blocked) → return the block messages only.
+        if not allowed_calls:
             return {
-                "messages": [
-                    ToolMessage(
-                        content="[tool_guard] 工具调用被安全机制阻止",
-                        tool_call_id=tc["id"],
-                    )
-                    for tc in tool_calls
-                ],
+                "messages": blocked_messages,
                 "tool_fingerprints": fingerprints + new_fps,
             }
 
-        # Split pending calls by concurrency class
-        concurrent_calls = [tc for tc in tool_calls if tc["name"] != _SUBAGENT_NAME]
-        serial_calls = [tc for tc in tool_calls if tc["name"] == _SUBAGENT_NAME]
+        # Split allowed calls by concurrency class
+        concurrent_calls = [tc for tc in allowed_calls if tc["name"] != _SUBAGENT_NAME]
+        serial_calls = [tc for tc in allowed_calls if tc["name"] == _SUBAGENT_NAME]
 
-        all_messages: list = []
+        all_messages: list = list(blocked_messages)
+        executed_messages: list = []  # only real tool results count toward error stats
 
         # Run concurrent tools in parallel
         if concurrent_calls and _concurrent_node:
@@ -124,7 +141,7 @@ def _make_guarded_tools_node(bound_tools: list[Any]):
                 "messages": [*messages[:-1], AIMessage(content="", tool_calls=concurrent_calls)],
             }
             result = await _concurrent_node.ainvoke(subset_state, config)
-            all_messages.extend(result.get("messages", []))
+            executed_messages.extend(result.get("messages", []))
 
         for call in serial_calls:
             if _serial_node:
@@ -133,9 +150,12 @@ def _make_guarded_tools_node(bound_tools: list[Any]):
                     "messages": [*messages[:-1], AIMessage(content="", tool_calls=[call])],
                 }
                 result = await _serial_node.ainvoke(subset_state, config)
-                all_messages.extend(result.get("messages", []))
+                executed_messages.extend(result.get("messages", []))
 
-        new_error_counts = update_error_counts(tool_calls, all_messages, error_counts)
+        all_messages.extend(executed_messages)
+        # Count errors only over calls actually executed — a guard-blocked call
+        # was never run, so it must not feed the circuit breaker.
+        new_error_counts = update_error_counts(allowed_calls, executed_messages, error_counts)
         return {
             "messages": all_messages,
             "tool_fingerprints": fingerprints + new_fps,

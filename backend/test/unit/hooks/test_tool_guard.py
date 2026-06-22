@@ -16,10 +16,14 @@ from __future__ import annotations
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from backend.v.hooks.tool_guard import (
+    BLOCK_BUDGET,
+    BLOCK_CIRCUIT,
+    BLOCK_LOOP,
     CIRCUIT_OPEN_THRESHOLD,
     LOOP_STOP_THRESHOLD,
     LOOP_WARN_THRESHOLD,
     TURN_MAX_TOOL_CALLS,
+    block_message,
     check_loop,
     compute_fingerprint,
     count_tool_calls_since_last_human,
@@ -27,6 +31,7 @@ from backend.v.hooks.tool_guard import (
     exceeds_turn_budget,
     is_circuit_open,
     is_tool_error,
+    message_is_error,
     update_error_counts,
 )
 
@@ -167,44 +172,76 @@ class TestIsToolError:
 
 
 class TestEvaluateToolCalls:
-    def test_first_call_no_force(self) -> None:
+    def test_first_call_no_reason(self) -> None:
         calls = [{"id": "c1", "name": "recall_memory", "args": {"q": "a"}}]
-        new_fps, force = evaluate_tool_calls(calls, [], {})
+        new_fps, reasons = evaluate_tool_calls(calls, [], {})
         assert len(new_fps) == 1
-        assert force is False
+        assert reasons == [None]
 
-    def test_loop_stop_forces_handoff(self) -> None:
+    def test_loop_stop_gives_loop_reason(self) -> None:
         fp = compute_fingerprint("recall_memory", {"q": "a"})
         existing = [fp] * LOOP_STOP_THRESHOLD
         calls = [{"id": "c1", "name": "recall_memory", "args": {"q": "a"}}]
-        new_fps, force = evaluate_tool_calls(calls, existing, {})
-        assert force is True
+        new_fps, reasons = evaluate_tool_calls(calls, existing, {})
         assert new_fps == [fp]
+        assert reasons[0]["reason"] == BLOCK_LOOP
+        assert reasons[0]["tool"] == "recall_memory"
+        assert reasons[0]["count"] == LOOP_STOP_THRESHOLD + 1
 
-    def test_warn_does_not_force(self) -> None:
+    def test_warn_does_not_block(self) -> None:
         fp = compute_fingerprint("recall_memory", {"q": "a"})
         existing = [fp] * LOOP_WARN_THRESHOLD
         calls = [{"id": "c1", "name": "recall_memory", "args": {"q": "a"}}]
-        _, force = evaluate_tool_calls(calls, existing, {})
-        assert force is False
+        _, reasons = evaluate_tool_calls(calls, existing, {})
+        assert reasons == [None]
 
-    def test_circuit_open_forces_handoff(self) -> None:
+    def test_circuit_open_gives_circuit_reason(self) -> None:
         calls = [{"id": "c1", "name": "recall_memory", "args": {"q": "a"}}]
-        _, force = evaluate_tool_calls(
+        _, reasons = evaluate_tool_calls(
             calls,
             [],
             {"recall_memory": CIRCUIT_OPEN_THRESHOLD},
         )
-        assert force is True
+        assert reasons[0]["reason"] == BLOCK_CIRCUIT
+        assert reasons[0]["tool"] == "recall_memory"
 
-    def test_one_bad_call_taints_batch(self) -> None:
+    def test_circuit_precedence_over_loop(self) -> None:
+        # A tool that is both looping AND circuit-open reports circuit (tool unhealthy).
+        fp = compute_fingerprint("recall_memory", {"q": "a"})
+        existing = [fp] * LOOP_STOP_THRESHOLD
+        calls = [{"id": "c1", "name": "recall_memory", "args": {"q": "a"}}]
+        _, reasons = evaluate_tool_calls(calls, existing, {"recall_memory": CIRCUIT_OPEN_THRESHOLD})
+        assert reasons[0]["reason"] == BLOCK_CIRCUIT
+
+    def test_only_offending_call_blocked(self) -> None:
+        # The clean call stays allowed (None); only the looping one gets a reason.
         good = {"id": "c1", "name": "recall_memory", "args": {"q": "ok"}}
         bad = {"id": "c2", "name": "recall_memory", "args": {"q": "loop"}}
         loop_fp = compute_fingerprint("recall_memory", {"q": "loop"})
         existing = [loop_fp] * LOOP_STOP_THRESHOLD
-        new_fps, force = evaluate_tool_calls([good, bad], existing, {})
-        assert force is True
+        new_fps, reasons = evaluate_tool_calls([good, bad], existing, {})
         assert len(new_fps) == 2
+        assert reasons[0] is None
+        assert reasons[1]["reason"] == BLOCK_LOOP
+
+
+class TestBlockMessage:
+    def test_loop_mentions_tool_and_count(self) -> None:
+        msg = block_message(BLOCK_LOOP, tool="search", count=5)
+        assert msg.startswith("[tool_guard]")
+        assert "search" in msg and "5" in msg
+
+    def test_circuit_mentions_tool(self) -> None:
+        msg = block_message(BLOCK_CIRCUIT, tool="search", count=3)
+        assert "[tool_guard]" in msg and "search" in msg
+
+    def test_budget_mentions_cap(self) -> None:
+        msg = block_message(BLOCK_BUDGET, cap=8)
+        assert "[tool_guard]" in msg and "8" in msg
+
+    def test_unknown_reason_safe_fallback(self) -> None:
+        msg = block_message("???")
+        assert msg.startswith("[tool_guard]")
 
 
 class TestUpdateErrorCounts:
@@ -238,3 +275,39 @@ class TestUpdateErrorCounts:
         msgs = [ToolMessage(content="[error]", tool_call_id="c1")]
         update_error_counts(calls, msgs, original)
         assert original == {"recall_memory": 1}
+
+    def test_status_error_counts_regardless_of_content(self) -> None:
+        # A Chinese error string the content heuristic would miss, but
+        # status="error" (set by ToolNode on a raise) catches it.
+        calls = [{"id": "c1", "name": "search", "args": {}}]
+        msgs = [ToolMessage(content="检索失败", tool_call_id="c1", status="error")]
+        out = update_error_counts(calls, msgs, {})
+        assert out["search"] == 1
+
+    def test_empty_result_success_not_counted(self) -> None:
+        # Clean empty-result (no error marker) with default success status → not an error.
+        calls = [{"id": "c1", "name": "recall_memory", "args": {}}]
+        msgs = [ToolMessage(content="（暂无相关历史记忆）", tool_call_id="c1")]
+        out = update_error_counts(calls, msgs, {})
+        assert out == {}
+
+    def test_returned_error_marker_still_counted(self) -> None:
+        # MCP/subagent signal failure by RETURNING "[tool_error]" → status stays
+        # "success" (no raise), so the content fallback must still catch it.
+        calls = [{"id": "c1", "name": "shop__query_order", "args": {}}]
+        msgs = [ToolMessage(content="[tool_error] upstream 500", tool_call_id="c1")]
+        out = update_error_counts(calls, msgs, {})
+        assert out["shop__query_order"] == 1
+
+
+class TestMessageIsError:
+    def test_status_error_wins(self) -> None:
+        # status="error" forces error even when content looks clean.
+        assert message_is_error(ToolMessage(content="ok", tool_call_id="c", status="error"))
+
+    def test_returned_error_marker_via_content(self) -> None:
+        # Default success status + error-marker content → error via fallback.
+        assert message_is_error(ToolMessage(content="[tool_error] boom", tool_call_id="c"))
+
+    def test_clean_success_not_error(self) -> None:
+        assert not message_is_error(ToolMessage(content="正常结果", tool_call_id="c"))

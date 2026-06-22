@@ -104,34 +104,92 @@ def is_tool_error(content: Any) -> bool:
     return False
 
 
+def message_is_error(msg: Any) -> bool:
+    """Whether a ToolMessage represents a failed tool call.
+
+    ``status="error"`` (set by LangGraph's ToolNode when a tool *raises*, and by
+    the guard on blocked calls) is authoritative — locale- and wording-independent.
+
+    Otherwise falls back to the content heuristic. This fallback is REQUIRED, not
+    optional: tools that signal failure by *returning* a marker string (MCP's
+    ``[tool_error]``, ``[subagent_error]``) come back with the default
+    ``status="success"`` because they didn't raise — only the content tells them
+    apart from a legit empty-result success like ``（暂无相关历史记忆）``. So we
+    never treat ``status="success"`` as authoritatively-not-error.
+    """
+    if getattr(msg, "status", None) == "error":
+        return True
+    return is_tool_error(getattr(msg, "content", ""))
+
+
+# ── Block reasons ─────────────────────────────────────────────────────────
+# Each blocked tool call gets a *specific* reason + next-step guidance, so the
+# LLM can adapt (change args / switch tool / answer from what it has) instead of
+# blindly retrying against an opaque "blocked" wall. The text is the ToolMessage
+# content the model reads; ``[tool_guard]`` prefix marks it as a guard signal
+# (reflection skips these as non-facts).
+BLOCK_LOOP = "loop"
+BLOCK_CIRCUIT = "circuit"
+BLOCK_BUDGET = "budget"
+
+_BLOCK_TEMPLATES: dict[str, str] = {
+    BLOCK_LOOP: (
+        "[tool_guard] 已用完全相同的参数调用 {tool} {count} 次，不再重复执行。"
+        "换一组不同的参数再试，或直接用已经检索到的结果回答客户。"
+    ),
+    BLOCK_CIRCUIT: (
+        "[tool_guard] 工具 {tool} 本次会话已连续失败 {count} 次，已暂停使用。"
+        "改用其他工具，或在确实拿不到数据时转人工，不要再调用它。"
+    ),
+    BLOCK_BUDGET: (
+        "[tool_guard] 本轮工具调用已达上限（{cap} 次），不再执行新的调用。"
+        "请基于本轮已获取的结果直接作答，不要再发起检索。"
+    ),
+}
+
+
+def block_message(reason: str, *, tool: str = "", count: int = 0, cap: int = 0) -> str:
+    """Render the LLM-facing guidance text for a block ``reason``."""
+    template = _BLOCK_TEMPLATES.get(reason)
+    if template is None:  # unknown reason → safe generic fallback
+        return "[tool_guard] 工具调用被安全机制阻止。"
+    return template.format(tool=tool, count=count, cap=cap)
+
+
 def evaluate_tool_calls(
     tool_calls: list[dict[str, Any]],
     fingerprints: list[str],
     error_counts: dict[str, int],
-) -> tuple[list[str], bool]:
-    """Evaluate all pending tool calls and return ``(new_fps, force_handoff)``.
+) -> tuple[list[str], list[dict[str, Any] | None]]:
+    """Evaluate pending tool calls per-call for loop / circuit blocks.
 
-    ``new_fps`` is the list of fingerprints for the current batch (to be
-    appended to state). ``force_handoff`` is ``True`` if any call should
-    be blocked.
+    Returns ``(new_fps, reasons)`` where ``new_fps`` is the fingerprint of each
+    call (appended to state) and ``reasons`` is aligned 1:1 with ``tool_calls``:
+    ``None`` means the call is allowed, otherwise a dict
+    ``{"reason": <BLOCK_*>, "tool": str, "count": int}`` describing why THAT
+    call is blocked. The turn-budget block is applied separately by the caller
+    (it needs message history), and takes precedence over a ``None`` here.
     """
     new_fps: list[str] = []
-    force = False
+    reasons: list[dict[str, Any] | None] = []
     for tc in tool_calls:
         name = tc.get("name", "")
         args = tc.get("args") or {}
         fp = compute_fingerprint(name, args)
         new_fps.append(fp)
+        reason: dict[str, Any] | None = None
         count, stop = check_loop(fingerprints, fp)
-        if stop:
+        if is_circuit_open(error_counts, name):
+            # Circuit takes precedence: the tool itself is unhealthy.
+            _log.error("tool_guard.circuit_open", tool=name)
+            reason = {"reason": BLOCK_CIRCUIT, "tool": name, "count": error_counts.get(name, 0)}
+        elif stop:
             _log.error("tool_guard.loop_stop", tool=name, count=count + 1)
-            force = True
+            reason = {"reason": BLOCK_LOOP, "tool": name, "count": count + 1}
         elif count >= LOOP_WARN_THRESHOLD:
             _log.warning("tool_guard.loop_warn", tool=name, count=count + 1)
-        if is_circuit_open(error_counts, name):
-            _log.error("tool_guard.circuit_open", tool=name)
-            force = True
-    return new_fps, force
+        reasons.append(reason)
+    return new_fps, reasons
 
 
 def update_error_counts(
@@ -139,12 +197,16 @@ def update_error_counts(
     tool_messages: list[Any],
     error_counts: dict[str, int],
 ) -> dict[str, int]:
-    """Increment error counts for tools whose ToolMessage looks like an error."""
+    """Increment error counts for tools whose ToolMessage represents a failure.
+
+    Uses :func:`message_is_error` (status-first, content-fallback) so genuine
+    failures count toward the circuit breaker while empty-result successes do not.
+    """
     updated = dict(error_counts)
     id_to_name = {tc["id"]: tc.get("name", "") for tc in tool_calls}
     for msg in tool_messages:
         tool_call_id = getattr(msg, "tool_call_id", None)
-        if tool_call_id and is_tool_error(getattr(msg, "content", "")):
+        if tool_call_id and message_is_error(msg):
             name = id_to_name.get(tool_call_id, "")
             if name:
                 updated[name] = updated.get(name, 0) + 1
