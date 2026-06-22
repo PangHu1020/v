@@ -156,6 +156,13 @@ async def main() -> None:
     parser.add_argument("--out", type=Path, help="output report json (default: stdout)")
     parser.add_argument("--limit", type=int, help="only eval first N cases (for quick testing)")
     parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=CONCURRENCY,
+        help=f"parallel cases (default {CONCURRENCY}); set 1 to serialize and avoid "
+        "rate-limiting on hosted APIs.",
+    )
+    parser.add_argument(
         "--no-ragas",
         action="store_true",
         help="skip the RAGAS generation-quality stage (retrieval/feedback metrics only).",
@@ -191,7 +198,7 @@ async def main() -> None:
     graph = build_graph(ckpt)
 
     # Run cases concurrently.
-    sem = asyncio.Semaphore(CONCURRENCY)
+    sem = asyncio.Semaphore(args.concurrency)
 
     async def _wrapped(idx, c):
         async with sem:
@@ -261,7 +268,7 @@ async def main() -> None:
                 embed_base_url=settings.embedding.base_url,
                 embed_api_key=settings.embedding.api_key,
                 embed_model=settings.embedding.model,
-                concurrency=CONCURRENCY,
+                concurrency=args.concurrency,
             )
             # Fold per-case scores back onto the results for the JSON dump.
             by_id = {pc["case_id"]: pc for pc in per_case}
