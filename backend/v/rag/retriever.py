@@ -161,7 +161,7 @@ class KnowledgeRetriever:
         client: Any,
         collection_name: str,
         stage: int,
-        query_text: str,
+        sparse_text: str,
         query_vector: list[float],
         top_k: int,
         filter_expr: str | None,
@@ -174,6 +174,11 @@ class KnowledgeRetriever:
         (dense + BM25). The cascade is gone, but the two modes are kept so the
         weights can still be ablated; production calls hybrid. ``filter_expr``
         is a prebuilt Milvus boolean expression (or ``None`` for no filter).
+
+        Dense and sparse take *different* inputs: ``query_vector`` is the
+        embedding of the cleaned semantic query, while ``sparse_text`` is the
+        entity-keyword string fed to BM25 — so the two branches are optimised
+        independently (semantic intent vs lexical term match).
         """
 
         if stage == 1:
@@ -198,7 +203,7 @@ class KnowledgeRetriever:
                 expr=filter_expr,
             )
             req_sparse = AnnSearchRequest(
-                data=[query_text],
+                data=[sparse_text],
                 anns_field="sparse_embedding",
                 param={"metric_type": "BM25"},
                 limit=top_k,
@@ -240,6 +245,7 @@ class KnowledgeRetriever:
         embedder: Any,
         llm_caller: Any = None,  # Kept for signature compatibility (unused)
         query: str,
+        keywords: str | None = None,
         top_k: int = DEFAULT_TOP_K,
         source_type: str | None = None,
         category: str | None = None,
@@ -250,11 +256,22 @@ class KnowledgeRetriever:
     ) -> list[dict[str, Any]]:
         """Hybrid search (dense + BM25) then rerank, truncated to ``top_k``.
 
+        Dense and BM25 take independent inputs: ``query`` (a clean semantic
+        description) is embedded for the dense branch; ``keywords`` (the entity
+        terms) drives the BM25 sparse branch. They optimise different signals —
+        semantic intent vs lexical match — so feeding BM25 the colloquial full
+        sentence dilutes term frequency. ``keywords`` falls back to ``query``
+        when not supplied, preserving prior single-input behaviour.
+
         Args:
             pool: Unused (signature compatibility).
             embedder: LangChain embeddings instance with ``aembed_query``.
             llm_caller: Unused (the LLM query-rewrite stage was removed).
-            query: Natural-language query — already written by the agent LLM.
+            query: Clean semantic description for the dense branch — colloquial
+                filler and emotion stripped, just the product intent.
+            keywords: Space-separated entity keywords for the BM25 branch
+                (brand / category / spec terms the customer actually said).
+                Falls back to ``query`` when empty.
             top_k: Maximum rows to return (clamped to [1, MAX_TOP_K]).
             source_type: Optional filter, e.g. ``"product"``.
             category: Optional product-category filter (``metadata["category"]``),
@@ -274,6 +291,7 @@ class KnowledgeRetriever:
         if not query:
             return []
 
+        sparse_text = keywords.strip() if keywords and keywords.strip() else query
         bounded_k = max(1, min(int(top_k), MAX_TOP_K))
         cfg = settings or get_settings()
         milvus_cfg = cfg.milvus
@@ -303,7 +321,7 @@ class KnowledgeRetriever:
             client,
             milvus_cfg.collection_name,
             2,  # hybrid
-            query,
+            sparse_text,
             query_vector,
             candidate_k,
             filter_expr,

@@ -98,6 +98,50 @@ class TestRetrieveHybrid:
         )
         assert len(result) == 3
 
+    @patch("backend.v.rag.retriever.AnnSearchRequest")
+    @patch("backend.v.rag.retriever.MilvusClient")
+    async def test_keywords_drive_bm25_query_drives_dense(
+        self, mock_cls: MagicMock, mock_ann: MagicMock
+    ) -> None:
+        """Dense branch embeds ``query``; BM25 branch gets ``keywords`` verbatim."""
+        client = MagicMock()
+        mock_cls.return_value = client
+        client.has_collection.return_value = True
+        client.hybrid_search.return_value = [[_hit("P001", "x")]]
+
+        await KnowledgeRetriever().retrieve(
+            embedder=_fake_embedder([0.1] * 1024),
+            query="便宜的入门手机",
+            keywords="红米 双卡",
+            settings=_settings(),
+        )
+
+        # Two AnnSearchRequest builds: [0]=dense (embedding), [1]=sparse (BM25).
+        dense_kw = mock_ann.call_args_list[0].kwargs
+        sparse_kw = mock_ann.call_args_list[1].kwargs
+        assert dense_kw["anns_field"] == "embedding"
+        assert dense_kw["data"] == [[0.1] * 1024]  # the embedded query vector
+        assert sparse_kw["anns_field"] == "sparse_embedding"
+        assert sparse_kw["data"] == ["红米 双卡"]  # keywords, NOT the query
+
+    @patch("backend.v.rag.retriever.AnnSearchRequest")
+    @patch("backend.v.rag.retriever.MilvusClient")
+    async def test_bm25_falls_back_to_query_when_no_keywords(
+        self, mock_cls: MagicMock, mock_ann: MagicMock
+    ) -> None:
+        """No keywords → BM25 reuses the query (prior single-input behaviour)."""
+        client = MagicMock()
+        mock_cls.return_value = client
+        client.has_collection.return_value = True
+        client.hybrid_search.return_value = [[_hit("P001", "x")]]
+
+        await KnowledgeRetriever().retrieve(
+            embedder=_fake_embedder(), query="红米手机", settings=_settings()
+        )
+
+        sparse_kw = mock_ann.call_args_list[1].kwargs
+        assert sparse_kw["data"] == ["红米手机"]
+
     @patch("backend.v.rag.retriever.build_reranker")
     @patch("backend.v.rag.retriever.MilvusClient")
     async def test_rerank_reorders(self, mock_cls: MagicMock, mock_build: MagicMock) -> None:
