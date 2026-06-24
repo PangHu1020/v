@@ -24,5 +24,15 @@
         "name": "Internal SOPs"
       }
     ]
+  },
+  "tools": {
+    "permissions": {
+      "search":            "allowed",
+      "calculator":        "allowed",
+      "recall_memory":     "allowed",
+      "load_skill":        "allowed",
+      "subagent":          "ask",
+      "transfer_to_human": "allowed"
+    }
   }
 }

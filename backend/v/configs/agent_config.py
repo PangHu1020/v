@@ -1,36 +1,32 @@
-"""Extension config loader for ``.agent/config.json`` (MCP servers + skills).
+"""Extension config loader for ``.agent/config.json`` (MCP servers + skills + tools).
 
 A single project-local JSON file declares the agent's *extensions* — the MCP
-servers it connects to and the skill sources it loads. Both subsystems live
-here (not in ``.env`` / ``config.yaml``) because they are structured lists, not
-flat scalars, and they share two cross-cutting conventions:
+servers it connects to, the skill sources it loads, and per-tool execution
+permissions (allowed / ask / deny).
 
-- **Per-entry ``enable``**: every server / skill source carries ``enable``;
-  only ``true`` entries are loaded. Flipping one off needs no deletion.
-- **``${VAR}`` interpolation**: any string value may embed ``${ENV_VAR}``,
-  resolved from the process environment at load time. Secrets (api keys,
-  oauth_client_secret) therefore stay in ``.env`` while the structure is
-  committable — honouring the "no hardcoded secrets" rule.
+Conventions:
+- **Per-entry ``enable``**: MCP servers / skill sources carry ``enable``.
+- **``${VAR}`` interpolation**: secrets stay in ``.env``.
+- **Tool permissions**: ``tools.permissions`` maps tool names to execution policy.
 
 Shape::
 
     {
-      "mcp": {
-        "servers": [
-          {"enable": true, "id": "shop", "transport": "http",
-           "url": "http://localhost:9100/mcp", "auth_type": "oauth",
-           "oauth_client_secret": "${SHOP_OAUTH_SECRET}", ...}
-        ]
-      },
-      "skill": {
-        "sources": [
-          {"enable": true, "path": "/srv/skills/internal"}
-        ]
+      "mcp": {"servers": [...]},
+      "skill": {"sources": [...]},
+      "tools": {
+        "permissions": {
+          "search":          "allowed",
+          "calculator":      "allowed",
+          "recall_memory":   "allowed",
+          "load_skill":      "allowed",
+          "subagent":        "ask",
+          "transfer_to_human": "allowed"
+        }
       }
     }
 
-Missing file → empty config (MCP + skills both disabled), so a fresh checkout
-runs without any ``.agent/`` present.
+Missing file → empty config; absent tool entry → ``"allowed"`` (safe default).
 """
 
 from __future__ import annotations
@@ -40,7 +36,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from backend.v.mcp.config import MCPServerConfig
 from backend.v.utils.logging import get_logger
@@ -50,9 +46,10 @@ _log = get_logger("configs.agent_config")
 _CONFIG_FILE_ENV = "AGENT_CONFIG_FILE"
 _DEFAULT_CONFIG_FILE = ".agent/config.json"
 
-# ${VAR} — a single env reference. We only support whole-token references plus
-# inline embedding (e.g. "Bearer ${TOK}"); the regex matches each occurrence.
 _VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+ToolPermission = Literal["allowed", "ask", "deny"]
+_VALID_PERMISSIONS: frozenset[str] = frozenset({"allowed", "ask", "deny"})
 
 
 @dataclass(frozen=True)
@@ -69,6 +66,8 @@ class AgentConfig:
 
     mcp_servers: list[MCPServerConfig] = field(default_factory=list)
     skill_sources: list[SkillSource] = field(default_factory=list)
+    tool_permissions: dict[str, ToolPermission] = field(default_factory=dict)
+    """Per-tool execution policy. Absent entry defaults to ``"allowed"``."""
 
 
 def _config_path() -> str:
@@ -165,6 +164,19 @@ def load_agent_config(
     mcp_servers = [MCPServerConfig(**e) for e in mcp_enabled]
     skill_sources = [SkillSource(path=e["path"], name=e.get("name", "")) for e in skill_enabled]
 
+    # Tool permissions: plain string values, no secrets, no interpolation needed.
+    raw_perms: dict[str, Any] = (raw.get("tools") or {}).get("permissions") or {}
+    if not isinstance(raw_perms, dict):
+        raise ValueError(f"{cfg_path}: tools.permissions must be a JSON object")
+    tool_permissions: dict[str, ToolPermission] = {}
+    for tool_name, perm in raw_perms.items():
+        if perm not in _VALID_PERMISSIONS:
+            raise ValueError(
+                f"{cfg_path}: tools.permissions.{tool_name}={perm!r} must be one of "
+                f"{sorted(_VALID_PERMISSIONS)}"
+            )
+        tool_permissions[str(tool_name)] = perm  # type: ignore[assignment]
+
     _log.info(
         "configs.agent_config.loaded",
         path=str(cfg_path),
@@ -172,5 +184,10 @@ def load_agent_config(
         skill_sources=len(skill_sources),
         mcp_total=len(mcp_raw),
         skill_total=len(skill_raw),
+        tool_permissions=tool_permissions,
     )
-    return AgentConfig(mcp_servers=mcp_servers, skill_sources=skill_sources)
+    return AgentConfig(
+        mcp_servers=mcp_servers,
+        skill_sources=skill_sources,
+        tool_permissions=tool_permissions,
+    )

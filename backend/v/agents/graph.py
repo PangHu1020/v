@@ -40,6 +40,7 @@ from backend.v.agents.edges import (
 )
 from backend.v.agents.intent_reflect import clarify_node, intent_node, reflection_node
 from backend.v.agents.nodes import AGENT_TOOLS, agent_fast_node, agent_node, enter_node, exit_node
+from backend.v.agents.orchestrator import ToolOrchestrator
 from backend.v.agents.state import CustomerServiceState
 from backend.v.hooks.tool_guard import (
     BLOCK_BUDGET,
@@ -47,7 +48,6 @@ from backend.v.hooks.tool_guard import (
     block_message,
     evaluate_tool_calls,
     exceeds_turn_budget,
-    update_error_counts,
 )
 from backend.v.utils.logging import get_logger
 
@@ -64,19 +64,19 @@ bus consumer's handler guard → DLQ. The per-turn budget is the primary defence
 this is depth-in-depth."""
 
 
-def _make_guarded_tools_node(bound_tools: list[Any]):
-    """ToolNode wrapper that:
-    - runs non-subagent tools concurrently via asyncio.gather
-    - runs subagent serially after the rest (avoids nested LLM concurrency risk)
-    - enforces dead-loop + circuit-breaker guards
+def _make_guarded_tools_node(bound_tools: list[Any], tool_permissions: dict | None = None):
+    """ToolNode wrapper: guard checks (loop/circuit/budget) + orchestrated execution.
+
+    The guard decides *whether* to run each call; the :class:`ToolOrchestrator`
+    decides *how* (permission check, parallel pool, timeout, JSON envelope).
     """
     from langgraph.prebuilt import ToolNode
 
-    # Separate tool sets for concurrent vs serial execution
     _concurrent_tools = [t for t in bound_tools if getattr(t, "name", None) != _SUBAGENT_NAME]
     _serial_tools = [t for t in bound_tools if getattr(t, "name", None) == _SUBAGENT_NAME]
     _concurrent_node = ToolNode(_concurrent_tools) if _concurrent_tools else None
     _serial_node = ToolNode(_serial_tools) if _serial_tools else None
+    _orchestrator = ToolOrchestrator(_concurrent_node, _serial_node, tool_permissions or {})
 
     async def _guarded(state: CustomerServiceState, config: RunnableConfig) -> dict[str, Any]:
         messages = state.get("messages", [])
@@ -120,52 +120,30 @@ def _make_guarded_tools_node(bound_tools: list[Any]):
                 ToolMessage(content=content, tool_call_id=tc["id"], status="error")
             )
 
-        # Nothing left to run (all blocked) → return the block messages only.
+        # Nothing left to run (all blocked by guard) → return block messages only.
         if not allowed_calls:
             return {
                 "messages": blocked_messages,
                 "tool_fingerprints": fingerprints + new_fps,
             }
 
-        # Split allowed calls by concurrency class
-        concurrent_calls = [tc for tc in allowed_calls if tc["name"] != _SUBAGENT_NAME]
-        serial_calls = [tc for tc in allowed_calls if tc["name"] == _SUBAGENT_NAME]
-
-        all_messages: list = list(blocked_messages)
-        executed_messages: list = []  # only real tool results count toward error stats
-
-        # Run concurrent tools in parallel
-        if concurrent_calls and _concurrent_node:
-            subset_state = {
-                **state,
-                "messages": [*messages[:-1], AIMessage(content="", tool_calls=concurrent_calls)],
-            }
-            result = await _concurrent_node.ainvoke(subset_state, config)
-            executed_messages.extend(result.get("messages", []))
-
-        for call in serial_calls:
-            if _serial_node:
-                subset_state = {
-                    **state,
-                    "messages": [*messages[:-1], AIMessage(content="", tool_calls=[call])],
-                }
-                result = await _serial_node.ainvoke(subset_state, config)
-                executed_messages.extend(result.get("messages", []))
-
-        all_messages.extend(executed_messages)
-        # Count errors only over calls actually executed — a guard-blocked call
-        # was never run, so it must not feed the circuit breaker.
-        new_error_counts = update_error_counts(allowed_calls, executed_messages, error_counts)
+        # Orchestrator: permission check → parallel/serial dispatch → timeout → JSON envelope.
+        orch_result = await _orchestrator.execute(allowed_calls, state, config, error_counts)
         return {
-            "messages": all_messages,
+            "messages": blocked_messages + orch_result.messages,
             "tool_fingerprints": fingerprints + new_fps,
-            "tool_error_counts": new_error_counts,
+            "tool_error_counts": orch_result.new_error_counts,
         }
 
     return _guarded
 
 
-def build_graph(checkpointer: BaseCheckpointSaver, *, extra_tools: list[Any] | None = None):
+def build_graph(
+    checkpointer: BaseCheckpointSaver,
+    *,
+    extra_tools: list[Any] | None = None,
+    tool_permissions: dict | None = None,
+):
     """Compile the agent graph with intent routing + conditional reflection.
 
     Args:
@@ -173,6 +151,8 @@ def build_graph(checkpointer: BaseCheckpointSaver, *, extra_tools: list[Any] | N
         extra_tools: Dynamically-discovered tools to bind on top of the
             built-in ``AGENT_TOOLS`` — e.g. MCP server tools resolved at
             startup. Bound to both the LLM and the guarded ToolNode.
+        tool_permissions: Per-tool execution policy from ``.agent/config.json``
+            (``allowed`` / ``ask`` / ``deny``). Empty / absent → all allowed.
     """
     bound_tools = list(AGENT_TOOLS) + list(extra_tools or [])
 
@@ -186,7 +166,7 @@ def build_graph(checkpointer: BaseCheckpointSaver, *, extra_tools: list[Any] | N
     graph.add_node(CLARIFY, clarify_node)
     graph.add_node(AGENT, _agent)
     graph.add_node(AGENT_FAST, agent_fast_node)
-    graph.add_node(TOOLS, _make_guarded_tools_node(bound_tools))
+    graph.add_node(TOOLS, _make_guarded_tools_node(bound_tools, tool_permissions))
     graph.add_node(REFLECT, reflection_node)
     graph.add_node(EXIT, exit_node)
 

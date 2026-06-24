@@ -228,13 +228,34 @@ class ReflectionResult(BaseModel):
 
 
 def _collect_tool_facts(messages: list) -> str:
-    """Concatenate all ToolMessage contents from the current turn."""
+    """Concatenate tool result payloads from the current turn.
+
+    Handles both the JSON envelope emitted by :class:`ToolOrchestrator`
+    (``{"ok": bool, "data": "..."}`` shape) and legacy plain-string content
+    for backward compatibility.  Guard-block markers are always skipped.
+    """
+    import json as _json
+
     facts: list[str] = []
     for m in messages:
-        if isinstance(m, ToolMessage):
-            content = m.content if isinstance(m.content, str) else str(m.content)
-            if content and not content.startswith("[tool_guard]"):
-                facts.append(content)
+        if not isinstance(m, ToolMessage):
+            continue
+        content = m.content if isinstance(m.content, str) else str(m.content)
+        if not content:
+            continue
+        # Try JSON envelope first (new path).
+        try:
+            d = _json.loads(content)
+            if isinstance(d, dict):
+                if d.get("ok") and d.get("data"):
+                    facts.append(d["data"])
+                # ok=false → skip (error, not a fact to cite)
+                continue
+        except (_json.JSONDecodeError, TypeError):
+            pass
+        # Legacy plain string (no envelope).
+        if not content.startswith("[tool_guard]"):
+            facts.append(content)
     return "\n".join(facts) or "（本轮无工具调用结果，回复不应引用任何具体事实。）"
 
 

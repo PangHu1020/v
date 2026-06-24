@@ -97,7 +97,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         mcp_tools = mcp_registry.tools
         _log.info("app.mcp.ready", servers=len(mcp_configs), tools=len(mcp_tools))
 
-    graph = build_graph(redis_ckpt, extra_tools=mcp_tools)
+    graph = build_graph(
+        redis_ckpt,
+        extra_tools=mcp_tools,
+        tool_permissions=agent_cfg.tool_permissions,
+    )
 
     from backend.app.channels.wecom_aibot.outbound import WecomAibotOutbound
 

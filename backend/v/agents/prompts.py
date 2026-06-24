@@ -58,7 +58,9 @@ def build_main_system_prompt(channel: str) -> str:
 1. 先判断本句意图属于哪一类（咨询 / 投诉 / 退款 / 物流 / 闲聊）。
 2. 需要"具体事实"（订单号、单号、库存、价格、时间）时，\
 必须先调工具拿到数据再回复，不要凭借推测。
-3. 工具返回后，把结果用客户能听懂的话复述，不要把 JSON / SQL 字段名直接抛给客户。
+3. 工具返回 JSON：{{"ok": true, "data": "结果内容"}} 或 {{"ok": false, "error": "原因"}}。\
+ok=true 时从 data 取内容，用自然语言复述；\
+ok=false 时根据 error 描述调整（换参数重试 / 转人工），**不要把 JSON 原文展示给客户**。
 </workflow>
 
 <style>
